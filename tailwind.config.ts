@@ -2,7 +2,7 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: ["class"],
-  content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}"],
+  content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}", "./tailwind.config.ts"],
   theme: {
     extend: {
       borderRadius: {
@@ -11,8 +11,18 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        background: ({ opacityVariable, opacityValue }) => {
+          if (opacityValue !== undefined) {
+            return `hsl(var(--background) / ${opacityValue})`;
+          }
+          return `hsl(var(--background) / var(${opacityVariable}, 1))`;
+        },
+        foreground: ({ opacityVariable, opacityValue }) => {
+          if (opacityValue !== undefined) {
+            return `hsl(var(--foreground) / ${opacityValue})`;
+          }
+          return `hsl(var(--foreground) / var(${opacityVariable}, 1))`;
+        },
         card: {
           DEFAULT: "var(--card)",
           foreground: "var(--card-foreground)",
@@ -41,7 +51,11 @@ export default {
           DEFAULT: "var(--destructive)",
           foreground: "var(--destructive-foreground)",
         },
-        border: "var(--border)",
+        border: {
+          DEFAULT: "var(--border)",
+          border: "var(--border)",
+          current: "currentColor",
+        },
         input: "var(--input)",
         ring: "var(--ring)",
         chart: {
