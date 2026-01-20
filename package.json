@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "vite": "^5.4.19",
+    "vite-tsconfig-paths": "^5.1.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
     "@hookform/resolvers": "^3.10.0",
