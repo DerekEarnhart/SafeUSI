@@ -70,7 +70,9 @@ export class PythonBridge {
       console.log('WSM Engine initialized successfully');
     } catch (error) {
       console.error('Failed to initialize WSM Engine:', error);
-      throw error;
+      console.warn('WSM Engine will not be available. Server will continue without it.');
+      // Don't throw - allow server to continue without this service
+      this.isInitialized = false;
     }
   }
 

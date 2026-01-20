@@ -107,7 +107,9 @@ export class HarmonicBridgeService extends EventEmitter {
       console.log('Harmonic Bridge Service initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Harmonic Bridge:', error);
-      throw error;
+      console.warn('Harmonic Bridge will not be available. Server will continue without it.');
+      // Don't throw - allow server to continue without this service
+      this.isInitialized = false;
     }
   }
 
