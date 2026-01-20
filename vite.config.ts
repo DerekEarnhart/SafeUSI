@@ -8,9 +8,8 @@ export default defineConfig({
     react(),
     tsconfigPaths(),
   ],
-  root: "client",
   build: {
-    outDir: "../dist/client",
+    outDir: "dist/client",
     emptyOutDir: true,
     rollupOptions: {
       input: {
