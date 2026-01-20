@@ -257,6 +257,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, status: 'operational' });
   });
 
+  // Temporary admin password reset endpoint (REMOVE IN PRODUCTION)
+  app.post('/api/admin/reset-password-temp', async (req, res) => {
+    try {
+      const { secret } = req.body;
+      
+      // Simple secret check (replace with environment variable in production)
+      if (secret !== 'reset-admin-2025') {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+
+      const password = 'WSM2025!Secure';
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+      const hashedPassword = `${salt}:${hash}`;
+
+      const user = await storage.getUserByUsername('owner_admin');
+      if (!user) {
+        return res.status(404).json({ error: 'Admin user not found' });
+      }
+
+      // Update password
+      await storage.updateUser(user.id, { password: hashedPassword });
+
+      res.json({ success: true, message: 'Admin password reset successfully' });
+    } catch (error) {
+      console.error('Error resetting admin password:', error);
+      res.status(500).json({ error: 'Failed to reset password' });
+    }
+  });
+
   // User signup endpoint (public)
   app.post('/api/auth/signup', async (req, res) => {
     try {
