@@ -1,0 +1,827 @@
+import React, { useEffect, useState } from "react";
+
+// --- Optional libs (bundled in preview):
+import JSZip from "jszip";
+
+// NOTE:
+// We intentionally avoid importing 'file-saver' because the sandbox ESM shim
+// at https://cdn.jsdelivr.net/npm/file-saver/+esm sometimes does not expose a
+// named `saveAs` export. Instead we implement a tiny, robust blob downloader
+// that works in modern browsers.
+
+/** Build a download link for a blob without triggering it. Useful for tests. */
+function buildDownloadLink(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  return { a, url };
+}
+
+/** Save a blob to the user's machine (anchor + objectURL fallback). */
+function saveBlob(blob: Blob, filename: string) {
+  const { a, url } = buildDownloadLink(blob, filename);
+  // Some browsers block programmatic clicks if the element isn't in the DOM
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke in a microtask to allow download to start
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// Minimal icons without external deps
+const Icon = ({ label }: { label: string }) => (
+  <span className="px-2 py-0.5 rounded bg-black/20 border border-white/10 text-xs font-mono select-none">{label}</span>
+);
+
+// Utilities
+const b64 = {
+  set: (k: string, v: string) => localStorage.setItem(k, btoa(v)),
+  get: (k: string) => {
+    const v = localStorage.getItem(k);
+    try {
+      return v ? atob(v) : "";
+    } catch {
+      return "";
+    }
+  },
+  del: (k: string) => localStorage.removeItem(k),
+};
+
+function classNames(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+// Simple toast
+function useToast() {
+  const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err" } | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(id);
+  }, [toast]);
+  return { toast, show: setToast } as const;
+}
+
+// Provider adapters (OpenAI, Gemini) — minimal, fetch-based
+type Provider = "openai" | "gemini";
+
+type Settings = {
+  provider: Provider;
+  openaiKey: string;
+  openaiModel: string;
+  geminiKey: string;
+  geminiModel: string;
+};
+
+const DEFAULTS: Settings = {
+  provider: "openai",
+  openaiKey: "",
+  openaiModel: "gpt-4o-mini", // user can change freely
+  geminiKey: "",
+  geminiModel: "gemini-2.0-flash", // user can change freely
+};
+
+function loadSettings(): Settings {
+  return {
+    provider: (localStorage.getItem("hpa.provider") as Provider) || DEFAULTS.provider,
+    openaiKey: b64.get("hpa.openaiKey"),
+    openaiModel: localStorage.getItem("hpa.openaiModel") || DEFAULTS.openaiModel,
+    geminiKey: b64.get("hpa.geminiKey"),
+    geminiModel: localStorage.getItem("hpa.geminiModel") || DEFAULTS.geminiModel,
+  };
+}
+
+function saveSettings(s: Settings) {
+  localStorage.setItem("hpa.provider", s.provider);
+  localStorage.setItem("hpa.openaiModel", s.openaiModel);
+  localStorage.setItem("hpa.geminiModel", s.geminiModel);
+  if (s.openaiKey) b64.set("hpa.openaiKey", s.openaiKey);
+  if (s.geminiKey) b64.set("hpa.geminiKey", s.geminiKey);
+}
+
+// Robust JSON extractor (handles extra prose wrapped around JSON)
+function extractJSONObject(text: string) {
+  // bracket-match to find the first top-level {...} block
+  let start = -1;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (text[i] === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const json = text.slice(start, i + 1);
+        try {
+          return JSON.parse(json);
+        } catch {}
+      }
+    }
+  }
+  throw new Error("Could not locate valid JSON object in model response.");
+}
+
+// Providers
+async function callOpenAI(opts: { apiKey: string; model: string; prompt: string; images?: string[]; json?: boolean }) {
+  const { apiKey, model, prompt, images, json } = opts;
+  const url = "https://api.openai.com/v1/chat/completions"; // wide compatibility
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` } as const;
+
+  // Compose messages; support image inputs if provided.
+  const content: any[] = [{ type: "text", text: prompt }];
+  if (images && images.length > 0) {
+    for (const dataUrl of images) content.push({ type: "input_image", image_url: { url: dataUrl } });
+  }
+  const body: any = {
+    model,
+    messages: [{ role: "user", content }],
+    temperature: 0.2,
+  };
+  if (json) body.response_format = { type: "json_object" };
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(`OpenAI ${res.status}: ${msg}`);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Empty OpenAI response");
+  return String(text);
+}
+
+async function callGemini(opts: { apiKey: string; model: string; prompt: string; images?: string[]; json?: boolean }) {
+  const { apiKey, model, prompt, images, json } = opts;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const headers = { "Content-Type": "application/json" } as const;
+
+  const parts: any[] = [{ text: prompt }];
+  if (images && images.length > 0) {
+    for (const dataUrl of images) {
+      const [meta, b64] = dataUrl.split(",");
+      const mt = meta.substring(meta.indexOf(":" ) + 1, meta.indexOf(";"));
+      parts.push({ inlineData: { mimeType: mt, data: b64 } });
+    }
+  }
+
+  const payload: any = { contents: [{ role: "user", parts }] };
+  if (json) {
+    payload.generationConfig = { responseMimeType: "application/json" };
+  }
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(`Gemini ${res.status}: ${msg}`);
+  }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Empty Gemini response");
+  return String(text);
+}
+
+async function callModel(settings: Settings, prompt: string, opts?: { images?: string[]; expectJSON?: boolean }) {
+  const provider = settings.provider;
+  const json = !!opts?.expectJSON;
+  const images = opts?.images;
+
+  if (provider === "openai") {
+    if (!settings.openaiKey) throw new Error("Missing OpenAI API key");
+    return await callOpenAI({ apiKey: settings.openaiKey, model: settings.openaiModel, prompt, images, json });
+    } else {
+    if (!settings.geminiKey) throw new Error("Missing Gemini API key");
+    return await callGemini({ apiKey: settings.geminiKey, model: settings.geminiModel, prompt, images, json });
+  }
+}
+
+// Demo outputs (offline mode)
+const Demo = {
+  architect(spec: string) {
+    return {
+      projectName: "DemoProject",
+      files: [
+        { path: "README.md", content: `# DemoProject\n\nGenerated offline. Spec: ${spec.slice(0, 60)}...` },
+        { path: "requirements.txt", content: "requests\nfastapi" },
+        { path: "src/main.py", content: "print('Hello from demo mode')\n" },
+      ],
+    };
+  },
+  analyze(filename: string) {
+    return `Offline analysis: The file \"${filename}\" was parsed and indexed. In online mode, the model would map it to harmonic embeddings and summarize salient structure.`;
+  },
+  translate(text: string, target: string) {
+    return `(${target}) [DEMO TRANSLATION] ${text}`;
+  },
+};
+
+// Settings Modal
+function SettingsModal({ open, onClose, value, onSave }: { open: boolean; onClose: () => void; value: Settings; onSave: (s: Settings) => void }) {
+  const [local, setLocal] = useState<Settings>(value);
+  useEffect(() => setLocal(value), [value]);
+
+  const mask = (k: string) => (k ? k.replace(/.(?=.{4})/g, "•") : "");
+
+  return (
+    <div className={classNames("fixed inset-0 z-50", open ? "" : "pointer-events-none hidden")}> 
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(680px,92vw)] rounded-2xl border border-white/10 bg-zinc-900/95 p-6 shadow-2xl">
+        <h2 className="text-xl font-semibold mb-1">Settings</h2>
+        <p className="text-sm text-white/60 mb-4">Keys are stored locally (obfuscated) and used only for outgoing API requests in this browser.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="col-span-1 md:col-span-2">
+            <label className="text-sm text-white/70">Provider</label>
+            <div className="mt-1 flex gap-2">
+              {(["openai", "gemini"] as Provider[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setLocal({ ...local, provider: p })}
+                  className={classNames(
+                    "px-3 py-1.5 rounded-lg border text-sm",
+                    local.provider === p ? "bg-white text-black border-white" : "bg-transparent border-white/20 text-white/80 hover:border-white/40"
+                  )}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-white/70">OpenAI model</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.openaiModel}
+              onChange={(e) => setLocal({ ...local, openaiModel: e.target.value })}
+              placeholder="e.g. gpt-4o, gpt-4o-mini, (custom)"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-white/70">OpenAI API key</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.openaiKey}
+              onChange={(e) => setLocal({ ...local, openaiKey: e.target.value })}
+              placeholder="sk-..."
+              type="password"
+            />
+            {value.openaiKey && (
+              <div className="text-xs text-white/50 mt-1">Saved: {mask(value.openaiKey)}</div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm text-white/70">Gemini model</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.geminiModel}
+              onChange={(e) => setLocal({ ...local, geminiModel: e.target.value })}
+              placeholder="e.g. gemini-2.0-flash"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-white/70">Gemini API key</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.geminiKey}
+              onChange={(e) => setLocal({ ...local, geminiKey: e.target.value })}
+              placeholder="AI..."
+              type="password"
+            />
+            {value.geminiKey && (
+              <div className="text-xs text-white/50 mt-1">Saved: {mask(value.geminiKey)}</div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-between gap-2">
+          <div className="text-xs text-white/50">
+            Tip: Switch provider freely. Images are best supported via Gemini; text-only works with both.
+          </div>
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20"
+              onClick={onClose}
+            >Close</button>
+            <button
+              className="px-3 py-2 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300"
+              onClick={() => {
+                onSave(local);
+                onClose();
+              }}
+            >Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuideModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <div className={classNames("fixed inset-0 z-40", open ? "" : "pointer-events-none hidden")}> 
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(760px,94vw)] rounded-2xl border border-white/10 bg-zinc-900/95 p-6 shadow-2xl">
+        <h2 className="text-xl font-semibold mb-2">Quickstart</h2>
+        <ol className="list-decimal pl-5 space-y-2 text-sm text-white/80">
+          <li>Open <b>Settings</b> and paste an API key for <i>OpenAI</i> or <i>Gemini</i>. Pick a model (you can type any valid model name).</li>
+          <li>Use one of the three tabs:
+            <ul className="list-disc pl-5 mt-1 space-y-1">
+              <li><b>Architect</b>: Paste a spec. The app asks the model for a JSON bundle of files, zips them, and downloads your project.</li>
+              <li><b>Analyze</b>: Upload a file (text or image) and ask a question. The app sends the content to the model and shows the answer.</li>
+              <li><b>Translate</b>: Paste text and choose a target language; get a clean translation prompt with optional style controls.</li>
+            </ul>
+          </li>
+          <li>No keys? It still works in <b>Demo</b> mode with offline, synthetic outputs, so you can test the flow.</li>
+        </ol>
+        <div className="mt-4 text-xs text-white/50">
+          Privacy: Keys stay in your browser (localStorage, obfuscated). Nothing is sent anywhere except the model endpoints you choose.
+        </div>
+        <div className="mt-5 text-right">
+          <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Step({ idx, title, active, done }: { idx: number; title: string; active?: boolean; done?: boolean }) {
+  return (
+    <div className={classNames("flex items-center gap-3 rounded-xl border p-3", done ? "border-emerald-500/40 bg-emerald-500/5" : active ? "border-cyan-400/50 bg-cyan-400/5" : "border-white/10 bg-white/0")}> 
+      <div className={classNames("w-7 h-7 rounded-full grid place-items-center text-xs font-bold",
+        done ? "bg-emerald-500 text-black" : active ? "bg-cyan-400 text-black" : "bg-white/10 text-white/80")}>{idx}</div>
+      <div>
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-xs text-white/60">{done ? "Completed" : active ? "In progress" : "Pending"}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [tab, setTab] = useState<"architect" | "analyze" | "translate">("architect");
+  const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const [showSettings, setShowSettings] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
+  const { toast, show } = useToast();
+
+  // --- Architect state ---
+  const [spec, setSpec] = useState("");
+  const [archBusy, setArchBusy] = useState(false);
+  const [archLog, setArchLog] = useState<string[]>([]);
+
+  // --- Analyze state ---
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [analysis, setAnalysis] = useState("");
+  const [anBusy, setAnBusy] = useState(false);
+
+  // --- Translate state ---
+  const [srcText, setSrcText] = useState("");
+  const [targetLang, setTargetLang] = useState("es");
+  const [tone, setTone] = useState("neutral");
+  const [translated, setTranslated] = useState("");
+  const [trBusy, setTrBusy] = useState(false);
+
+  // --- Tests state ---
+  const [testsLog, setTestsLog] = useState<string>("");
+
+  useEffect(() => {
+    document.title = "Harmonic Project Architect — Universal Builder v3";
+  }, []);
+
+  function persist(newSettings: Settings) {
+    setSettings(newSettings);
+    saveSettings(newSettings);
+    show({ kind: "ok", msg: "Settings saved" });
+  }
+
+  const hasAnyKey = !!(settings.openaiKey || settings.geminiKey);
+
+  async function testConnection() {
+    try {
+      const resp = await callModel(
+        settings,
+        "Reply with the single word: OK",
+        { expectJSON: false }
+      );
+      if (/\bOK\b/i.test(resp)) show({ kind: "ok", msg: `${settings.provider.toUpperCase()} reachable` });
+      else show({ kind: "ok", msg: `${settings.provider.toUpperCase()} responded` });
+    } catch (e: any) {
+      show({ kind: "err", msg: String(e.message || e) });
+    }
+  }
+
+  // ARCHITECT
+  async function onArchitect() {
+    setArchBusy(true);
+    setArchLog((l) => [
+      ...l,
+      `➡️ Intent: Build from spec (${new Date().toLocaleTimeString()})`,
+    ]);
+    try {
+      let projectData: any;
+      if (!hasAnyKey) {
+        projectData = Demo.architect(spec);
+      } else {
+        const schemaHint = `Your response MUST be a single JSON object with keys: projectName (string) and files (array of { path, content }). No extra prose.`;
+        const prompt = [
+          "You are Harmonic Project Architect (HPA).",
+          schemaHint,
+          "Rules:",
+          "- Return ONLY JSON.",
+          "- Include README.md and requirements.txt.",
+          "- Use a sensible multi-file structure (src/, public/, etc.).",
+          "- Keep file contents complete (no placeholders like '<...>').",
+          "- Keep code runnable (no missing imports).",
+          "",
+          "User specification:",
+          spec,
+        ].join("\n");
+        const raw = await callModel(settings, prompt, { expectJSON: true });
+        const parsed = (() => {
+          try { return JSON.parse(raw); } catch { return extractJSONObject(raw); }
+        })();
+        projectData = parsed;
+      }
+
+      if (!projectData?.projectName || !Array.isArray(projectData?.files)) {
+        throw new Error("Model returned invalid JSON structure.");
+      }
+
+      // Zip
+      const zip = new JSZip();
+      projectData.files.forEach((f: any) => zip.file(f.path, f.content));
+      const blob = await zip.generateAsync({ type: "blob" });
+      const fname = `${projectData.projectName}.zip`;
+      saveBlob(blob, fname);
+      setArchLog((l) => [...l, `✅ Download started: ${fname}`]);
+      show({ kind: "ok", msg: `Project '${projectData.projectName}' ready` });
+    } catch (e: any) {
+      setArchLog((l) => [...l, `❌ ${String(e.message || e)}`]);
+      show({ kind: "err", msg: String(e.message || e) });
+    } finally {
+      setArchBusy(false);
+    }
+  }
+
+  // ANALYZE
+  function onPickFile(f?: File | null) {
+    const chosen = f ?? null;
+    setFile(chosen);
+    setAnalysis("");
+    setFilePreviewUrl((u) => {
+      if (u) URL.revokeObjectURL(u);
+      return chosen ? URL.createObjectURL(chosen) : null;
+    });
+  }
+
+  async function onAnalyze() {
+    if (!file) {
+      show({ kind: "err", msg: "Pick a file first" });
+      return;
+    }
+    setAnBusy(true);
+    try {
+      if (!hasAnyKey) {
+        setAnalysis(Demo.analyze(file.name));
+        return;
+      }
+      const isImage = /^image\//i.test(file.type);
+      const textPrefix = [
+        "You are HPA. Analyze the given file and answer the user's question.",
+        "Connect to ideas like harmonic embeddings or operator safety only when helpful.",
+        `Question: ${question || "Summarize this file."}`,
+      ].join("\n");
+
+      let images: string[] | undefined;
+      let prompt = textPrefix;
+      if (isImage) {
+        images = [await fileToDataURL(file)];
+      } else {
+        const textContent = await file.text();
+        prompt += `\n\n--- FILE (${file.name}) ---\n${textContent}\n--- END FILE ---`;
+      }
+
+      const resp = await callModel(settings, prompt, { images, expectJSON: false });
+      setAnalysis(resp.trim());
+    } catch (e: any) {
+      setAnalysis(`Error: ${String(e.message || e)}`);
+    } finally {
+      setAnBusy(false);
+    }
+  }
+
+  // TRANSLATE
+  async function onTranslate() {
+    if (!srcText.trim()) {
+      show({ kind: "err", msg: "Enter text to translate" });
+      return;
+    }
+    setTrBusy(true);
+    try {
+      if (!hasAnyKey) {
+        setTranslated(Demo.translate(srcText, targetLang));
+        return;
+      }
+      const prompt = `Translate the following text into ${targetLang} with ${tone} tone. Preserve meaning, names, and formatting. Return only the translation.\n\n---\n${srcText}\n---`;
+      const resp = await callModel(settings, prompt, { expectJSON: false });
+      setTranslated(resp.trim());
+    } catch (e: any) {
+      setTranslated(`Error: ${String(e.message || e)}`);
+    } finally {
+      setTrBusy(false);
+    }
+  }
+
+  // SELF‑TESTS (minimal runtime checks — acts as our test suite)
+  function runSelfTests() {
+    const logs: string[] = [];
+    const ok = (name: string) => logs.push(`✅ ${name}`);
+    const fail = (name: string, err: any) => logs.push(`❌ ${name} -> ${String(err?.message || err)}`);
+
+    // Test 1: classNames
+    try {
+      const got = classNames("a", false && "x", "b", null, undefined, "c");
+      if (got !== "a b c") throw new Error(`expected "a b c", got "${got}"`);
+      ok("classNames merges truthy tokens");
+    } catch (e) { fail("classNames", e); }
+
+    // Test 2: extractJSONObject ok
+    try {
+      const obj = extractJSONObject("noise {\"x\":1,\"y\":[2,3]} tail");
+      if (!(obj && obj.x === 1 && Array.isArray(obj.y) && obj.y[1] === 3)) throw new Error("parsed object mismatch");
+      ok("extractJSONObject extracts first JSON object");
+    } catch (e) { fail("extractJSONObject ok", e); }
+
+    // Test 3: extractJSONObject fail
+    try {
+      let threw = false;
+      try { extractJSONObject("no json here"); } catch { threw = true; }
+      if (!threw) throw new Error("expected throw when JSON missing");
+      ok("extractJSONObject throws when no JSON present");
+    } catch (e) { fail("extractJSONObject fail", e); }
+
+    // Test 4: buildDownloadLink/saveBlob smoke
+    try {
+      const blob = new Blob(["test"], { type: "text/plain" });
+      const { a, url } = buildDownloadLink(blob, "test.txt");
+      if (!a || !url || !/^blob:/.test(url)) throw new Error("invalid link/url");
+      URL.revokeObjectURL(url);
+      ok("buildDownloadLink produces a blob: URL");
+    } catch (e) { fail("buildDownloadLink", e); }
+
+    // Test 5: settings round‑trip (no throw)
+    try {
+      const before = loadSettings();
+      saveSettings(before);
+      const after = loadSettings();
+      if (!after) throw new Error("no settings returned");
+      ok("settings load/save round‑trip");
+    } catch (e) { fail("settings round‑trip", e); }
+
+    const summary = (() => {
+      const passed = logs.filter(l => l.startsWith("✅")).length;
+      const failed = logs.filter(l => l.startsWith("❌")).length;
+      return `Tests: ${passed} passed, ${failed} failed`;
+    })();
+
+    setTestsLog([summary, ...logs].join("\n"));
+    show({ kind: logs.some(l => l.startsWith("❌")) ? "err" : "ok", msg: summary });
+  }
+
+  const steps = [
+    { t: "Intent Harmonization" },
+    { t: "Task Decomposition" },
+    { t: "Parallel Execution" },
+    { t: "Synthesis" },
+    { t: "Refinement" },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#0f0f23] via-[#1a1a3a] to-[#2d1b69] text-white px-4 py-6">
+      {/* Top bar */}
+      <div className="mx-auto max-w-6xl">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-amber-300">Harmonic Project Architect — Universal Builder v3</h1>
+            <div className="text-white/60 text-xs mt-1">Single-file React • API-key switcher • Architect • Analyze • Translate • Demo mode</div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setShowGuide(true)} className="px-3 py-1.5 rounded-lg border border-white/20 hover:border-white/40">Guide</button>
+            <button onClick={() => setShowSettings(true)} className="px-3 py-1.5 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300">Settings</button>
+          </div>
+        </div>
+
+        {/* Provider status */}
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <Icon label={settings.provider.toUpperCase()} />
+          {settings.provider === "openai" ? (
+            <span className="text-white/70">model: <b>{settings.openaiModel}</b></span>
+          ) : (
+            <span className="text-white/70">model: <b>{settings.geminiModel}</b></span>
+          )}
+          <span className={classNames("px-2 py-0.5 rounded border", hasAnyKey ? "border-emerald-500/50 text-emerald-300" : "border-white/20 text-white/70")}>{hasAnyKey ? "key: present" : "key: demo mode"}</span>
+          <button onClick={testConnection} className="ml-auto px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20">Test</button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-4">
+          {([
+            ["architect", "Architect"],
+            ["analyze", "Analyze"],
+            ["translate", "Translate"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={classNames(
+                "px-3 py-1.5 rounded-lg border",
+                tab === id ? "bg-white text-black border-white" : "bg-transparent border-white/20 text-white/80 hover:border-white/40"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Left: main tool */}
+          <div className="lg:col-span-2 rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4">
+            {tab === "architect" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">1) Architect a multi‑file project</h2>
+                <textarea
+                  value={spec}
+                  onChange={(e) => setSpec(e.target.value)}
+                  rows={10}
+                  placeholder="Describe what to build. Example: A FastAPI service with /ingest endpoint, saves JSON to sqlite, includes tests and a Makefile."
+                  className="w-full rounded-lg bg-black/30 border border-white/10 p-3 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                />
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={onArchitect}
+                    disabled={archBusy || !spec.trim()}
+                    className={classNames("px-3 py-2 rounded-lg font-semibold",
+                      archBusy ? "bg-white/30 text-white cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}
+                  >{archBusy ? "Architecting…" : "Architect & Download"}</button>
+                  <span className="text-xs text-white/60">Returns a .zip with files produced by the selected model (or demo bundle if no key).</span>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+                  {steps.map((s, i) => (
+                    <Step key={i} idx={i + 1} title={s.t} active={archBusy && i === 2} done={!archBusy && i < 4} />
+                  ))}
+                </div>
+
+                <div className="mt-4 text-xs text-white/60">
+                  Safety: the app asks for complete files (no placeholders) and a valid JSON envelope. If the model replies with extra prose, we extract the JSON block safely.
+                </div>
+              </div>
+            )}
+
+            {tab === "analyze" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">2) Analyze a file with context</h2>
+                <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-end">
+                  <div className="flex-1">
+                    <label className="text-sm text-white/70">Pick a file</label>
+                    <input type="file" onChange={(e) => onPickFile(e.target.files?.[0] || null)} className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-2.5" />
+                  </div>
+                  <div className="flex-[2]">
+                    <label className="text-sm text-white/70">Ask a question</label>
+                    <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="e.g. Summarize this; how does it relate to X?" className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-2.5" />
+                  </div>
+                  <button onClick={onAnalyze} disabled={anBusy || !file} className={classNames("px-3 py-2 rounded-lg font-semibold", anBusy ? "bg-white/30 cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}>{anBusy ? "Analyzing…" : "Analyze"}</button>
+                </div>
+
+                {file && (
+                  <div className="mt-3 flex items-center gap-3 text-xs text-white/70">
+                    <span>File:</span>
+                    <span className="px-2 py-0.5 rounded bg-black/30 border border-white/10">{file.name}</span>
+                    <span className="opacity-70">{file.type || "(unknown type)"}</span>
+                    {filePreviewUrl && /^image\//i.test(file.type) && (
+                      <img src={filePreviewUrl} className="h-12 w-auto rounded border border-white/10" />
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4">
+                  <label className="text-sm text-white/70">Answer</label>
+                  <textarea value={analysis} readOnly rows={10} className="w-full rounded-lg bg-black/30 border border-white/10 p-3" />
+                </div>
+              </div>
+            )}
+
+            {tab === "translate" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">3) Translate text</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="text-sm text-white/70">Source text</label>
+                    <textarea value={srcText} onChange={(e) => setSrcText(e.target.value)} rows={10} className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-3" placeholder="Paste text…" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-white/70">Target language code</label>
+                    <input value={targetLang} onChange={(e) => setTargetLang(e.target.value)} className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-2.5" placeholder="e.g. es, fr, de, zh" />
+
+                    <label className="text-sm text-white/70 mt-3 block">Tone</label>
+                    <select value={tone} onChange={(e) => setTone(e.target.value)} className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-2.5">
+                      {[
+                        ["neutral", "Neutral"],
+                        ["formal", "Formal"],
+                        ["casual", "Casual"],
+                        ["marketing", "Marketing"],
+                        ["technical", "Technical"],
+                      ].map(([v, t]) => (
+                        <option key={v} value={v}>{t}</option>
+                      ))}
+                    </select>
+
+                    <button onClick={onTranslate} disabled={trBusy || !srcText.trim()} className={classNames("mt-4 w-full px-3 py-2 rounded-lg font-semibold", trBusy ? "bg-white/30 cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}>{trBusy ? "Translating…" : "Translate"}</button>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label className="text-sm text-white/70">Translation</label>
+                  <textarea value={translated} readOnly rows={8} className="w-full rounded-lg bg-black/30 border border-white/10 p-3" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right: activity & notes */}
+          <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4">
+            <h3 className="font-semibold mb-2">Knowledge & Activity</h3>
+            <div className="text-xs text-white/60 mb-2">Live log & helpful notes.</div>
+
+            {tab === "architect" && (
+              <div className="space-y-2 text-sm">
+                <div className="text-white/80">Architect Log</div>
+                <div className="h-48 overflow-auto rounded-lg bg-black/30 border border-white/10 p-2 font-mono text-xs whitespace-pre-wrap">
+                  {archLog.length ? archLog.join("\n") : "No events yet. Add a spec and click Architect."}
+                </div>
+                <div className="text-xs text-white/60 mt-2">
+                  Tip: If a model wraps JSON with comments/context, the app extracts the first valid JSON object via bracket matching.
+                </div>
+              </div>
+            )}
+
+            {tab === "analyze" && (
+              <div className="text-xs text-white/70 space-y-2">
+                <div><b>Notes:</b> Images are supported best via Gemini inlineData. Text files go to either provider. Large files are truncated by your browser memory limits.</div>
+                <div>Keep secrets out of files; the content you send goes to the provider you selected.</div>
+              </div>
+            )}
+
+            {tab === "translate" && (
+              <div className="text-xs text-white/70 space-y-2">
+                <div>For precision, include locale (e.g., <code>pt-BR</code>) and tone constraints.</div>
+                <div>For domain jargon, prepend a short glossary in the source box.</div>
+              </div>
+            )}
+
+            {/* Tests panel */}
+            <div className="mt-4 border-t border-white/10 pt-3">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold">Self‑Tests</div>
+                <button onClick={runSelfTests} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20 text-xs">Run</button>
+              </div>
+              <div className="mt-2 h-40 overflow-auto rounded-lg bg-black/30 border border-white/10 p-2 font-mono text-xs whitespace-pre-wrap">
+                {testsLog || "Click Run to execute minimal runtime tests."}
+              </div>
+            </div>
+
+            <div className="mt-4 text-xs text-white/50">
+              UX: minimal, keyboard-friendly, clearly labeled controls. Everything is single-file for easy drop‑in.
+            </div>
+          </div>
+        </div>
+
+        {/* Toast */}
+        {toast && (
+          <div className={classNames(
+            "fixed bottom-4 right-4 px-3 py-2 rounded-lg border shadow-2xl",
+            toast.kind === "ok" ? "bg-emerald-500 text-black border-emerald-300" : "bg-rose-500 text-black border-rose-300"
+          )}>{toast.msg}</div>
+        )}
+      </div>
+
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} value={settings} onSave={persist} />
+      <GuideModal open={showGuide} onClose={() => setShowGuide(false)} />
+    </div>
+  );
+}
+
+async function fileToDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = (e) => reject(e);
+    reader.readAsDataURL(file);
+  });
+}

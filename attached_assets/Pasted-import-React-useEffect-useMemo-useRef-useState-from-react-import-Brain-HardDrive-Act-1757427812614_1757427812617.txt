@@ -1,0 +1,432 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Brain, HardDrive, Activity, Play, RefreshCcw, Download as DownloadIcon, Upload, FileCode2, Wand2, AlertTriangle, BookOpen, Shield, Gauge, ClipboardCopy, MessageSquare, Settings as SettingsIcon, Beaker, Satellite } from "lucide-react";
+// shadcn/ui — swap to your design system if desired
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+
+/*
+Harmonic Sovereign Console — Unified React App (v1.3)
+-----------------------------------------------------
+What’s new vs. your pasted files:
+- Fixes typos/dup imports and consolidates into a single, clean component
+- Adds **backend integration** to your mAGI service: list capabilities, run tools
+  (specifically, calls the **resonance_analyze** tool you embedded server‑side)
+- Keeps Memory Vault local (JSON) by default; Firestore hookup is left as a
+  clearly marked optional block to avoid forcing Firebase deps at build time
+- Preserves the Number‑Pipe encoder/decoder and the agentic Orchestrator
+- Includes a tiny **Bell correlation** demo + **Harmonic signature** utility
+
+Endpoints (configurable at runtime):
+- MAGI_API = window.__magi_api || "http://127.0.0.1:5000"
+- BIO_API  = window.__bio_api  || "http://127.0.0.1:5001"
+*/
+
+// ────────────────────────────────────────────────────────────────────────────
+// Runtime config hooks
+// ────────────────────────────────────────────────────────────────────────────
+const MAGI_API: string = (typeof window !== "undefined" && (window as any).__magi_api) || "http://127.0.0.1:5000";
+const BIO_API: string  = (typeof window !== "undefined" && (window as any).__bio_api)  || "http://127.0.0.1:5001";
+
+// ────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────────────
+function ts(ms: number) {
+  try { const d = new Date(ms); return isNaN(d.getTime()) ? String(ms) : d.toLocaleString(); } catch { return String(ms); }
+}
+function seedRand(seed: string) {
+  let h = 1779033703 ^ seed.length;
+  for (let i = 0; i < seed.length; i++) { h = Math.imul(h ^ seed.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+  return () => { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); const t = (h ^= h >>> 16) >>> 0; return t / 4294967296; };
+}
+function download(name: string, content: string) {
+  const blob = new Blob([content], { type: "application/json" });
+  const url = URL.createObjectURL(blob); const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function speak(text: string) { if (typeof window === "undefined") return; if (!("speechSynthesis" in window)) return; const u = new SpeechSynthesisUtterance(text); window.speechSynthesis.speak(u); }
+
+// Text -> hex -> BigInt (decimal string) and back (toy encoder)
+function textToBigIntString(s: string) {
+  const enc = new TextEncoder().encode(s); let hex = ""; for (const b of enc) hex += b.toString(16).padStart(2, "0");
+  const big = BigInt("0x" + (hex || "00")); return big.toString(10);
+}
+function bigIntStringToText(n: string) {
+  let big = BigInt(n || "0"); let hex = big.toString(16); if (hex.length % 2) hex = "0" + hex;
+  const bytes = new Uint8Array(hex.length / 2); for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return new TextDecoder().decode(bytes);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Demos: Bell correlation + Harmonic signature
+// ────────────────────────────────────────────────────────────────────────────
+function bellStateSimulation(theta: number) {
+  const cosT = Math.cos(theta); const sinT = Math.sin(theta);
+  if (Number.isNaN(theta)) return "Error: invalid θ.";
+  if (theta <= 0.01) return "θ≈0: perfect resonance (|Φ⁺⟩‑like). Max correlation.";
+  if (theta >= Math.PI - 0.01) return "θ≈π: perfect anti‑resonance (|Ψ⁻⟩‑like). Max anti‑corr.";
+  return `θ=${theta.toFixed(2)} → correlation ${(Math.abs(cosT)*100).toFixed(1)}%, entanglement ${(Math.abs(sinT)*100).toFixed(1)}%.`;
+}
+function analyzeHarmonicSignature(text: string) {
+  if (!text) return "Awaiting input…";
+  const L = text.length; const uniq = new Set(text).size; const complexity = L ? ((uniq/L)*100).toFixed(2) : "0.00";
+  const golden = (L * 1.618).toFixed(2);
+  return `Signature — complexity ${complexity}%, conceptual f0 ${golden}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Local AGI core (sim) for playground
+// ────────────────────────────────────────────────────────────────────────────
+class AGICore {
+  memoryVault: any; mathematicalRigorMode: boolean;
+  constructor(opts: any = {}) { this.memoryVault = opts.memoryVault || { audit_trail: [] }; this.mathematicalRigorMode = !!opts.mathematicalRigorMode; }
+  toggleMathematicalRigor(){ this.mathematicalRigorMode = !this.mathematicalRigorMode; return this.mathematicalRigorMode; }
+  spectralMultiply(freq1:number, amp1:number, phase1:number, freq2:number, amp2:number, phase2:number, n=128){
+    const t = Array.from({length:n}, (_,i)=> (i/n)*2*Math.PI);
+    const f = t.map(v=> amp1*Math.sin(freq1*v+phase1)); const g = t.map(v=> amp2*Math.sin(freq2*v+phase2)); const m = f.map((x,i)=> x*g[i]);
+    return { conceptual_mixed_frequencies: [freq1+freq2, Math.abs(freq1-freq2)], output_waveform_preview: m.slice(0,10).map(x=>+x.toFixed(3)) };
+  }
+  generateConceptualReasoning(q:string, opts:any={}){
+    const steps: string[] = [
+      `Perception: parsed intent in "${q.slice(0,80)}".`,
+      "Analysis: invoked Harmonic primitives (simulated).",
+      (this.mathematicalRigorMode||opts.rigor)?"Mathematical Rigor mode: attach formal steps where available.":"",
+      "Synthesis: compose answer balancing clarity and depth."
+    ].filter(Boolean) as string[];
+    const reply = this._synth(q); const ts = Date.now(); this.memoryVault.audit_trail.push({timestamp:ts, action:"generate_response", cue:q});
+    return { reply, reasoning: steps.join("\n"), meta:{timestamp:ts}};
+  }
+  _synth(q:string){ if(/spectral|multiply/.test(q.toLowerCase())){ const m=this.spectralMultiply(1,1,0,2,0.5,Math.PI/4); return `Spectral mix → freqs ${m.conceptual_mixed_frequencies.join(", ")}, preview ${m.output_waveform_preview.join(", ")}`;} return `Plan for "${q}": (1) formalize ops (2) simulate (3) log artifacts.`; }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Component
+// ────────────────────────────────────────────────────────────────────────────
+export default function HarmonicSovereignConsole() {
+  const [activeTab, setActiveTab] = useState<"console"|"chat"|"settings">("console");
+
+  // Memory vault (local JSON)
+  const seedVault = useMemo(()=>({
+    audit_trail: [{ timestamp: Date.now(), action: "init", details: { note: "Console initialized." } }],
+    supported_file_types: "all_known_formats_via_harmonic_embedding",
+    memory_attributes: { degradation: "none", permanence: "harmonic_stable", fading: "none" },
+    belief_state: { A:1, B:1, C:1 }, large_io_capability: "harmonic_compression_and_distributed_processing_framework",
+  }),[]);
+  const [vault, setVault] = useState<any>(structuredClone(seedVault));
+  const [vaultJson, setVaultJson] = useState<string>(JSON.stringify(seedVault, null, 2));
+  const [vaultOk, setVaultOk] = useState(true);
+  const [alphaA, setAlphaA] = useState<number>(vault.belief_state.A);
+  const [alphaB, setAlphaB] = useState<number>(vault.belief_state.B);
+  const [alphaC, setAlphaC] = useState<number>(vault.belief_state.C);
+  const alphaSum = alphaA + alphaB + alphaC;
+  const probs = useMemo(()=>({A:alphaA/alphaSum, B:alphaB/alphaSum, C:alphaC/alphaSum}),[alphaA,alphaB,alphaC,alphaSum]);
+
+  // Encoder/Decoder
+  const [encodeIn, setEncodeIn] = useState(""); const [encoded, setEncoded] = useState("");
+  const [decodeIn, setDecodeIn] = useState(""); const [decoded, setDecoded] = useState("");
+
+  // Demos
+  const [theta, setTheta] = useState<number>(0);
+  const [bellOut, setBellOut] = useState("");
+  const [sigIn, setSigIn] = useState(""); const [sigOut, setSigOut] = useState("");
+
+  // Orchestrator & chat
+  const [coherence, setCoherence] = useState(0); const [busy,setBusy]=useState(false); const [finalOut, setFinalOut]=useState("Awaiting workflow…");
+  const [appOut, setAppOut]=useState(""); const [planOut,setPlanOut]=useState(""); const [creaOut,setCreaOut]=useState("");
+  const [messages, setMessages] = useState<any[]>(()=>{ try{ return JSON.parse(localStorage.getItem("hagi:messages")||"[]"); }catch{return [];} });
+  const [input,setInput] = useState(""); const [rigor,setRigor]=useState(false); const endRef = useRef<HTMLDivElement|null>(null);
+  const coherenceBar = useMemo(()=>Math.max(0, Math.min(100, coherence)),[coherence]);
+  const coreRef = useRef<AGICore>(new AGICore({}));
+  useEffect(()=>{ localStorage.setItem("hagi:messages", JSON.stringify(messages)); endRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
+
+  // Backend (mAGI)
+  const [caps, setCaps] = useState<any[]>([]);
+  const [tools, setTools] = useState<any[]>([]);
+  const [resCodes, setResCodes] = useState<string>("6EQUJ5,665236");
+  const [resVerbose, setResVerbose] = useState<boolean>(false);
+  const [resPrime, setResPrime] = useState<boolean>(true);
+  const [resBins, setResBins] = useState<number>(16);
+  const [resOut, setResOut] = useState<any>(null);
+
+  async function fetchCapsAndTools(){
+    try{ const [c,t] = await Promise.all([
+      fetch(`${MAGI_API}/v1/capabilities`,{cache:"no-store"}).then(r=>r.json()),
+      fetch(`${MAGI_API}/v1/tools`,{cache:"no-store"}).then(r=>r.json()),
+    ]); setCaps(c||[]); setTools(t||[]); }catch(e){ console.warn("mAGI not reachable", e); }
+  }
+  useEffect(()=>{ fetchCapsAndTools(); },[]);
+
+  async function runResonanceAnalyze(){
+    const codes = resCodes.split(/\s*,\s*/).filter(Boolean);
+    try{
+      const r = await fetch(`${MAGI_API}/v1/jobs`,{method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ name: "resonance_analyze", args: { codes, prime_overlay: resPrime, bins: resBins, verbose: resVerbose }})});
+      const j = await r.json(); if(!j.job_id){ setResOut({error:"no job id"}); return; }
+      // poll
+      let done = null; let tries=0; while(!done && tries<40){
+        await new Promise(res=>setTimeout(res, 250)); tries++;
+        const s = await fetch(`${MAGI_API}/v1/jobs/${j.job_id}`).then(r=>r.json());
+        if(s.status === "done" || s.status === "error"){ done = s; }
+      }
+      setResOut(done || {error:"timeout"});
+    }catch(e:any){ setResOut({error: e?.message || String(e)}); }
+  }
+
+  // Memory Vault ops
+  function saveBeliefToVault(){ const next = structuredClone(vault); next.belief_state = {A:alphaA,B:alphaB,C:alphaC}; setVault(next); setVaultJson(JSON.stringify(next,null,2)); }
+  function importVaultFromJson(){ try{ const p = JSON.parse(vaultJson); setVault(p); if(p?.belief_state){ setAlphaA(+p.belief_state.A||1); setAlphaB(+p.belief_state.B||1); setAlphaC(+p.belief_state.C||1);} setVaultOk(true);}catch{ setVaultOk(false);} }
+  function exportVault(){ download("memory_vault.json", JSON.stringify(vault,null,2)); }
+  async function ingestFile(f?: File | null){ if(!f) return; const next = structuredClone(vault); next.audit_trail.unshift({timestamp:Date.now(), action:"file_received_and_processed", details:{fileName:f.name, fileSize:f.size, fileType:f.type, note:"Simulated embedding"}}); setVault(next); setVaultJson(JSON.stringify(next,null,2)); }
+
+  // Orchestrator
+  async function runOrchestrator(refine=false){ if(busy) return; setBusy(true); setFinalOut(refine?"Refinement cycle…":"Orchestrating…"); setCoherence(refine?Math.max(10,coherence*0.8):10);
+    const t = input.trim() || "Design a reproducible plan"; const rng = seedRand("app:"+t);
+    await new Promise(r=>setTimeout(r,300)); setCoherence(c=>c+20);
+    const hooks = ["prime‑quantum compression","infinite context surfaces","safety‑preserving operator","self‑auditing traces","harmonic scheduler"]; const pick = hooks[Math.floor(rng()*hooks.length)];
+    const app = `Minimal orchestrator for "${t}" with ${pick}, typed IO, offline‑first, JSON export.`;
+    const steps = ["Define intent → constraints → success metrics","Decompose into agents; assign capabilities","Parallel search; collect artifacts","Score with coherence + cost; downselect","Assemble final; tests + README"].map((s,i)=> `${i+1}. ${s}` ).join("\n");
+    const crea = `Art direction: graphite + cyan. Motif: lattice lines.`;
+    setAppOut(app); setPlanOut(steps); setCreaOut(crea); setCoherence(c=>Math.min(85,c+25)); await new Promise(r=>setTimeout(r,300));
+    const out = `Workflow for: "${t}"\n--- App Synthesizer ---\n${app}\n\n--- Strategic Planner ---\n${steps}\n\n--- Creative Modulator ---\n${crea}\n\nFinal coherence check.`;
+    setFinalOut(out); setCoherence(100); setBusy(false);
+  }
+
+  // Chat
+  function toggleReasoning(id:string){ /* placeholder — can attach chain‑of‑thought sim here if needed */ }
+  async function sendMessage(){ if(!input.trim()) return; const text=input.trim(); setMessages(m=>[...m,{id:Date.now()+":u",sender:"user",text,time:Date.now()}]); setInput(""); const res = coreRef.current.generateConceptualReasoning(text,{rigor}); setMessages(m=>[...m,{id:Date.now()+":m",sender:"model",text:res.reply,reasoning:res.reasoning,time:Date.now()}]); }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // UI
+  // ──────────────────────────────────────────────────────────────────────────
+  return (
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 p-3 md:p-6">
+      {/* Topbar */}
+      <div className="flex items-center gap-2 mb-4">
+        <Brain className="h-6 w-6" />
+        <div className="text-xl font-semibold">Harmonic Sovereign Console</div>
+        <Badge variant="secondary" className="ml-2">unified v1.3</Badge>
+        <div className="ml-auto flex gap-2">
+          <Button variant={activeTab === "console" ? "default" : "secondary"} onClick={()=>setActiveTab("console")} size="sm"><Gauge className="mr-2 h-4 w-4"/>Console</Button>
+          <Button variant={activeTab === "chat" ? "default" : "secondary"} onClick={()=>setActiveTab("chat")} size="sm"><MessageSquare className="mr-2 h-4 w-4"/>Chat</Button>
+          <Button variant={activeTab === "settings" ? "default" : "secondary"} onClick={()=>setActiveTab("settings")} size="sm"><SettingsIcon className="mr-2 h-4 w-4"/>Settings</Button>
+        </div>
+      </div>
+
+      {activeTab === "console" && (
+        <div className="grid gap-4 xl:gap-6 grid-cols-1 xl:grid-cols-[1.1fr_1.2fr]">
+          {/* LEFT column: Vault + Encoder + Demos */}
+          <div className="space-y-4">
+            {/* Memory Vault (local JSON) */}
+            <Card className="border-slate-800/60">
+              <CardHeader className="pb-2">
+                <div className="flex items-center gap-2"><HardDrive className="h-5 w-5"/><CardTitle>Memory Vault</CardTitle><Badge variant="secondary" className="ml-auto">harmonic_stable</Badge></div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-sm mb-1 font-medium">Belief priors (Dirichlet α)</div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div><div className="mb-1">A: {alphaA}</div><Input type="range" min={1} max={20} value={alphaA} onChange={(e)=>setAlphaA(+e.target.value)} /></div>
+                      <div><div className="mb-1">B: {alphaB}</div><Input type="range" min={1} max={20} value={alphaB} onChange={(e)=>setAlphaB(+e.target.value)} /></div>
+                      <div><div className="mb-1">C: {alphaC}</div><Input type="range" min={1} max={20} value={alphaC} onChange={(e)=>setAlphaC(+e.target.value)} /></div>
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">Probabilities ≈ {probs.A.toFixed(2)} / {probs.B.toFixed(2)} / {probs.C.toFixed(2)}</div>
+                    <div className="mt-2 flex gap-2"><Button size="sm" onClick={saveBeliefToVault}><Shield className="mr-2 h-4 w-4"/>Commit</Button></div>
+                  </div>
+                  <div>
+                    <div className="text-sm mb-1 font-medium">State export / import</div>
+                    <div className="flex gap-2 flex-wrap">
+                      <Button variant="secondary" size="sm" onClick={exportVault}><DownloadIcon className="mr-2 h-4 w-4"/>Export JSON</Button>
+                      <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                        <Upload className="h-4 w-4" />
+                        <input type="file" className="hidden" accept="application/json" onChange={async (e)=>{ const f=e.target.files?.[0]; if(!f) return; const txt=await f.text(); setVaultJson(txt); }} />
+                        Load JSON
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <Tabs defaultValue="audit" className="w-full mt-2">
+                  <TabsList className="grid grid-cols-3 bg-slate-900/50"><TabsTrigger value="audit">Audit Trail</TabsTrigger><TabsTrigger value="json">JSON</TabsTrigger><TabsTrigger value="demos">Demos</TabsTrigger></TabsList>
+                  <TabsContent value="audit" className="mt-3">
+                    <div className="max-h-56 overflow-auto rounded border border-slate-800/60">
+                      <table className="w-full text-xs"><thead className="bg-slate-900/60 text-slate-300 sticky top-0"><tr><th className="text-left p-2 w-[36%]">When</th><th className="text-left p-2 w-[30%]">Action</th><th className="text-left p-2">Details</th></tr></thead>
+                        <tbody>
+                          {vault.audit_trail.map((row:any,i:number)=> (
+                            <tr key={i} className="border-t border-slate-800/60"><td className="p-2 align-top">{ts(row.timestamp)}</td><td className="p-2 align-top">{row.action}</td><td className="p-2 align-top text-slate-300">{row.details?.note || row.details?.fileName || "—"}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="json" className="mt-3">
+                    <Textarea className={`font-mono text-xs min-h-[220px] ${vaultOk?"":"border-red-500"}`} value={vaultJson} onChange={(e)=>setVaultJson(e.target.value)} />
+                    <div className="flex gap-2 mt-2"><Button size="sm" onClick={importVaultFromJson}><RefreshCcw className="mr-2 h-4 w-4"/>Apply JSON</Button>{!vaultOk && <Badge variant="destructive" className="gap-1 text-xs"><AlertTriangle className="h-3 w-3"/>JSON parse error</Badge>}</div>
+                  </TabsContent>
+                  <TabsContent value="demos" className="mt-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium">Bell Correlation</div>
+                        <div className="flex items-center gap-2">
+                          <Input type="number" step="0.01" min={0} max={Math.PI} value={theta} onChange={(e)=>setTheta(+e.target.value)} />
+                          <Button size="sm" onClick={()=>setBellOut(bellStateSimulation(theta))}>Simulate</Button>
+                        </div>
+                        <Textarea readOnly className="text-xs min-h-[80px]" value={bellOut} />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium">Harmonic Signature</div>
+                        <Textarea value={sigIn} onChange={(e)=>setSigIn(e.target.value)} placeholder="Enter text…" />
+                        <Button size="sm" onClick={()=>setSigOut(analyzeHarmonicSignature(sigIn))}>Analyze</Button>
+                        <Textarea readOnly className="text-xs min-h-[80px]" value={sigOut} />
+                      </div>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              </CardContent>
+            </Card>
+
+            {/* Number‑Pipe Encoder */}
+            <Card className="border-slate-800/60">
+              <CardHeader className="pb-2"><div className="flex items-center gap-2"><FileCode2 className="h-5 w-5"/><CardTitle>Number‑Pipe Encoder (toy)</CardTitle><Badge className="ml-auto" variant="outline">not compression</Badge></div></CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs mb-1">Text → BigInt (decimal)</div>
+                  <Textarea className="font-mono text-xs min-h-[120px]" value={encodeIn} onChange={(e)=>setEncodeIn(e.target.value)} placeholder="Type any text here…" />
+                  <div className="flex gap-2 mt-2"><Button size="sm" onClick={()=>setEncoded(textToBigIntString(encodeIn))}><Wand2 className="mr-2 h-4 w-4"/>Encode</Button><Button size="sm" variant="secondary" onClick={()=>navigator.clipboard.writeText(encoded)}><ClipboardCopy className="mr-2 h-4 w-4"/>Copy</Button></div>
+                  <Textarea className="font-mono text-xs mt-2 min-h-[90px]" readOnly value={encoded} placeholder="Encoded number will appear here" />
+                </div>
+                <div>
+                  <div className="text-xs mb-1">BigInt (decimal) → Text</div>
+                  <Textarea className="font-mono text-xs min-h-[120px]" value={decodeIn} onChange={(e)=>setDecodeIn(e.target.value)} placeholder="Paste a big integer string…" />
+                  <div className="flex gap-2 mt-2"><Button size="sm" onClick={()=>setDecoded(bigIntStringToText(decodeIn))}><Wand2 className="mr-2 h-4 w-4"/>Decode</Button><Button size="sm" variant="secondary" onClick={()=>setDecodeIn("")}>Clear</Button></div>
+                  <Textarea className="font-mono text-xs mt-2 min-h-[90px]" readOnly value={decoded} placeholder="Decoded text will appear here" />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* RIGHT column: Orchestrator + Backend Tools */}
+          <div className="space-y-4">
+            {/* Orchestrator */}
+            <Card className="border-slate-800/60">
+              <CardHeader className="pb-2"><div className="flex items-center gap-2"><Brain className="h-5 w-5"/><CardTitle>Quantum‑Harmonic Orchestrator</CardTitle><Badge className="ml-auto" variant="secondary">sovereign</Badge></div></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-col md:flex-row gap-2">
+                  <Textarea value={input} onChange={(e)=>setInput(e.target.value)} placeholder="e.g., Build a TS canvas that exports reproducible artifacts" className="min-h-[80px]" />
+                  <div className="grid grid-cols-2 md:grid-cols-1 gap-2 min-w-[220px]">
+                    <Button onClick={()=>runOrchestrator(false)} disabled={busy}><Play className="mr-2 h-4 w-4"/>Start</Button>
+                    <Button variant="secondary" onClick={()=>runOrchestrator(true)} disabled={busy}><RefreshCcw className="mr-2 h-4 w-4"/>Refine</Button>
+                    <Button variant="outline" onClick={()=>speak(finalOut)} disabled={!finalOut}><Activity className="mr-2 h-4 w-4"/>Speak</Button>
+                  </div>
+                </div>
+                <div className="space-y-2"><div className="text-xs flex items-center gap-2"><Gauge className="h-4 w-4"/>Coherence: {Math.round(coherenceBar)}%</div><Progress value={coherenceBar} className="h-2" /></div>
+                <div className="grid md:grid-cols-3 gap-3">
+                  <Card className="bg-slate-900/40 border-slate-800/60"><CardHeader className="pb-2"><CardTitle className="text-base">App Synthesizer</CardTitle></CardHeader><CardContent><Textarea readOnly className="min-h-[120px] text-xs" value={appOut} /></CardContent></Card>
+                  <Card className="bg-slate-900/40 border-slate-800/60"><CardHeader className="pb-2"><CardTitle className="text-base">Strategic Planner</CardTitle></CardHeader><CardContent><Textarea readOnly className="min-h-[120px] text-xs" value={planOut} /></CardContent></Card>
+                  <Card className="bg-slate-900/40 border-slate-800/60"><CardHeader className="pb-2"><CardTitle className="text-base">Creative Modulator</CardTitle></CardHeader><CardContent><Textarea readOnly className="min-h-[120px] text-xs" value={creaOut} /></CardContent></Card>
+                </div>
+                <div><div className="text-sm mb-1 font-medium">Final Coherent Output</div><Textarea readOnly className="min-h-[130px] text-sm" value={finalOut} /></div>
+              </CardContent>
+            </Card>
+
+            {/* Backend Tools (mAGI) */}
+            <Card className="border-slate-800/60">
+              <CardHeader className="pb-2"><div className="flex items-center gap-2"><Satellite className="h-5 w-5"/><CardTitle>mAGI Tools & Capabilities</CardTitle><Badge className="ml-auto" variant="outline">{MAGI_API}</Badge></div></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex gap-2 flex-wrap"><Button size="sm" variant="secondary" onClick={fetchCapsAndTools}>Refresh</Button><Badge variant="secondary">caps: {caps.length}</Badge><Badge variant="secondary">tools: {tools.length}</Badge></div>
+                <div className="grid md:grid-cols-2 gap-3 text-xs">
+                  <div className="rounded border border-slate-800/60 p-2">
+                    <div className="font-medium mb-1">Capabilities</div>
+                    <pre className="whitespace-pre-wrap">{JSON.stringify(caps, null, 2)}</pre>
+                  </div>
+                  <div className="rounded border border-slate-800/60 p-2">
+                    <div className="font-medium mb-1">Tools</div>
+                    <pre className="whitespace-pre-wrap">{JSON.stringify(tools, null, 2)}</pre>
+                  </div>
+                </div>
+                <div className="rounded border border-slate-800/60 p-3 space-y-2">
+                  <div className="font-medium">Resonance Lab — Analyze Codes</div>
+                  <div className="grid sm:grid-cols-2 gap-2 items-center">
+                    <div className="text-xs opacity-80">codes (comma‑sep)</div>
+                    <Input value={resCodes} onChange={(e)=>setResCodes(e.target.value)} />
+                    <div className="text-xs opacity-80">bins</div>
+                    <Input type="number" min={4} max={64} value={resBins} onChange={(e)=>setResBins(+e.target.value)} />
+                    <div className="text-xs opacity-80">prime overlay</div>
+                    <Switch checked={resPrime} onCheckedChange={(v)=>setResPrime(!!v)} />
+                    <div className="text-xs opacity-80">verbose</div>
+                    <Switch checked={resVerbose} onCheckedChange={(v)=>setResVerbose(!!v)} />
+                  </div>
+                  <div className="flex gap-2"><Button size="sm" onClick={runResonanceAnalyze}>Run</Button></div>
+                  <pre className="text-xs whitespace-pre-wrap">{resOut ? JSON.stringify(resOut, null, 2) : "Result will appear here…"}</pre>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "chat" && (
+        <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+          <Card className="border-slate-800/60">
+            <CardHeader className="pb-2"><div className="flex items-center gap-2"><MessageSquare className="h-5 w-5"/><CardTitle>Chat & Playground</CardTitle><Badge className="ml-auto" variant="outline">local sim</Badge></div></CardHeader>
+            <CardContent>
+              <div className="text-xs mb-2 opacity-80">Status: {busy?"Working…":"Idle"}</div>
+              <div className="space-y-2 max-h-[50vh] overflow-auto rounded border border-slate-800/60 p-2">
+                {messages.length===0 && (<div className="text-xs opacity-70">No messages yet — try: "Spectral multiply 1 & 2"</div>)}
+                {messages.map((m:any)=> (
+                  <div key={m.id} className="rounded bg-slate-900/50 p-2">
+                    <div className="text-[11px] opacity-70">{m.sender} · {new Date(m.time).toLocaleTimeString()}</div>
+                    <div className="text-sm whitespace-pre-wrap">{m.text}</div>
+                    {m.reasoning && (<div className="text-[11px] mt-1 opacity-80 whitespace-pre-wrap">{m.reasoning}</div>)}
+                  </div>
+                ))}
+                <div ref={endRef} />
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Textarea value={input} onChange={(e)=>setInput(e.target.value)} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); } }} className="flex-1 min-h-[60px]" placeholder="Ask the AGICore anything…" />
+                <div className="grid gap-2 min-w-[140px]"><Button onClick={sendMessage}>Send</Button></div>
+              </div>
+            </CardContent>
+          </Card>
+          <div className="space-y-4">
+            <Card className="border-slate-800/60"><CardHeader className="pb-2"><div className="flex items-center gap-2"><Beaker className="h-5 w-5"/><CardTitle>Utilities</CardTitle></div></CardHeader><CardContent className="grid gap-2">
+              <Button size="sm" variant="outline" onClick={()=>{ const m=coreRef.current.spectralMultiply(1,1,0,2,0.5,Math.PI/4); setMessages(s=>[...s,{id:Date.now()+":sys", sender:"system", text:`Spectral demo freqs ${m.conceptual_mixed_frequencies.join(", ")}`, meta:m}]); }}>Spectral Multiply Demo</Button>
+              <Button size="sm" variant="outline" onClick={()=>{ const r = coreRef.current.generateConceptualReasoning("benchmark arc"); setMessages(s=>[...s,{id:Date.now()+":sys2", sender:"system", text:r.reply, reasoning:r.reasoning}]); }}>ARC Snapshot</Button>
+            </CardContent></Card>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "settings" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="border-slate-800/60">
+            <CardHeader className="pb-2"><div className="flex items-center gap-2"><SettingsIcon className="h-5 w-5"/><CardTitle>Modes</CardTitle></div></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between"><div><div className="font-medium">Mathematical Rigor</div><div className="text-xs opacity-80">Amplify formal steps in reasoning traces.</div></div><Switch checked={rigor} onCheckedChange={()=>{ const v=coreRef.current.toggleMathematicalRigor(); setRigor(v); }} /></div>
+              <div className="text-xs opacity-80">Local state is stored in browser only. Use the buttons below for backups.</div>
+              <div className="flex gap-2 flex-wrap"><Button size="sm" variant="secondary" onClick={()=>{ localStorage.removeItem("hagi:messages"); setMessages([]); }}>Clear Local Chat</Button><Button size="sm" onClick={()=>download("hagi_backup.json", JSON.stringify({ messages, memory: coreRef.current.memoryVault }, null, 2))}>Export Backup</Button></div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-800/60">
+            <CardHeader className="pb-2"><CardTitle>Backend Targets</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-xs">
+              <div>MAGI_API: <code>{MAGI_API}</code></div>
+              <div>BIO_API: <code>{BIO_API}</code></div>
+              <div className="opacity-80">(Set <code>window.__magi_api</code> / <code>window.__bio_api</code> at runtime to point this UI at any server.)</div>
+              <div className="opacity-80 mt-2">For Firestore memory vault: add your Firebase init in a small wrapper component and lift state into <em>vault</em>. I left it disabled here to keep this single-file drop‑in dependency‑free.</div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Optional quick smoke in dev: append ?runTests=1 to URL to run a small check
+if (typeof window !== "undefined" && window.location?.search?.includes("runTests=1")) {
+  try { const core = new AGICore(); const res1 = core.generateConceptualReasoning("spectral multiply 1 and 2"); console.assert(typeof res1.reply === "string"); console.assert(typeof res1.reasoning === "string"); console.log("Harmonic Sovereign Console dev tests passed", res1); } catch(e){ console.error("Dev tests failed", e); }
+}

@@ -1,0 +1,69 @@
+describe('AGI Chat Interface Tests', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    jest.spyOn(window, 'fetch').mockImplementation(async (url, options) => {
+      if (url.includes('openai.com')) {
+        return { ok: true, json: async () => ({ choices: [{ message: { content: 'Mock response' } }]) };
+      } else if (url.includes('generativelanguage.googleapis.com')) {
+        return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Mock response' }] } }]) };
+      }
+      return { ok: false, statusText: 'Mock error' };
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('Harmonic Scheduler queues and processes tasks', async () => {
+    const { schedule } = HarmonicScheduler();
+    let result;
+    schedule({
+      type: 'chat',
+      priority: 2,
+      data: { chatHistory: [], userText: 'Test' },
+      action: async () => 'Scheduled response'
+    });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const log = JSON.parse(localStorage.getItem('agi_scheduler_log') || '{}');
+    expect(Object.values(log)[0].status).toBe('done');
+    expect(Object.values(log)[0].result).toBe('Scheduled response');
+  });
+
+  test('Chat handles user input and LLM response', async () => {
+    const { setChatHistory } = React.useContext(AppContext);
+    const { callLLM } = useLLM();
+    await callLLM([], 'Test message');
+    expect(localStorage.getItem('agi_chat_history_v263')).toContain('Mock response');
+  });
+
+  test('Translator handles translation request', async () => {
+    const { translate } = useLLM();
+    const result = await translate('Hello', 'Spanish', 'auto');
+    expect(result).toBe('Mock response');
+  });
+
+  test('Builder saves and runs project', async () => {
+    const { fs, setFs } = React.useContext(AppContext);
+    setFs({ files: { 'test.jsx': { content: 'export default () => <div>Test</div>' } } });
+    await ESB.buildProject(fs, 'test.jsx');
+    expect(localStorage.getItem('agi_ui_fs_v263')).toContain('test.jsx');
+  });
+
+  test('Settings saves API keys', () => {
+    const { setSettings } = React.useContext(AppContext);
+    setSettings({ ...defaultSettings, geminiKeyEnc: enc('test-key') });
+    expect(localStorage.getItem('agi_ui_settings_v263')).toContain('test-key');
+  });
+
+  test('JSON export includes all state', () => {
+    const { exportAll } = React.useContext(AppContext);
+    jest.spyOn(document, 'createElement').mockReturnValue({ href: '', click: jest.fn(), download: 'agi_state_v263.json' });
+    exportAll();
+    expect(document.createElement).toHaveBeenCalledWith('a');
+    expect(localStorage.getItem('agi_chat_history_v263')).toBeDefined();
+    expect(localStorage.getItem('agi_ui_settings_v263')).toBeDefined();
+    expect(localStorage.getItem('agi_ui_fs_v263')).toBeDefined();
+    expect(localStorage.getItem('agi_scheduler_log')).toBeDefined();
+  });
+});

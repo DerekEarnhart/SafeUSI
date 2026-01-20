@@ -1,0 +1,29 @@
+Unknown message type: 
+Object {type: "benchmarking_status", data: {…}}
+data: Object
+type: "benchmarking_status"
+[[Prototype]]: Object
+WebSocket disconnected
+WebSocket connected
+Failed to execute 'fetch' on 'Window': '/api/vms/benchmark' is not a valid HTTP method.
+at window.fetch (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:218642)
+at Object.apply (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/__replco/static/devtools/injected.js:278:39)
+at apiRequest (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/lib/queryClient.ts:9:21)
+at Object.mutationFn (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/hooks/useVMBenchmarking.ts:59:14)
+at Object.fn (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:1189:29)
+at run (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:494:49)
+at Object.start (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:536:9)
+at _a6.execute (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:1225:56)
+at async handleProvisionBenchmarkingVM (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/components/dashboard/VMBenchmarking.tsx:438:18)
+Attempting to reconnect...
+WebSocket connected
+Failed to execute 'fetch' on 'Window': '/api/vms/benchmark' is not a valid HTTP method.
+at window.fetch (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/__replco/static/devtools/eruda/3.2.3/eruda.js:2:218642)
+at Object.apply (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/__replco/static/devtools/injected.js:278:39)
+at apiRequest (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/lib/queryClient.ts:9:21)
+at Object.mutationFn (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/hooks/useVMBenchmarking.ts:59:14)
+at Object.fn (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:1189:29)
+at run (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:494:49)
+at Object.start (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:536:9)
+at _a6.execute (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/@fs/home/runner/workspace/node_modules/.vite/deps/@tanstack_react-query.js?v=dc9d86bd:1225:56)
+at async handleProvisionBenchmarkingVM (https://d294e8d1-c028-4954-90f9-5b69ca7a1af9-00-ulo1r5pwky7s.picard.replit.dev/src/components/dashboard/VMBenchmarking.tsx:438:18)

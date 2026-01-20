@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""
+WSM Long-Running Task Prototype
+
+This script simulates a WSM-based Oracle designed for complex, long-running
+computational tasks. It applies a simplified Harmonic Control Law (HCL) to
+iteratively refine a solution over a series of steps, demonstrating a
+methodical, non-probabilistic approach.
+
+It includes a dummy 'Beale Cipher' sub-task to illustrate how the WSM could
+work on such problems, as described in your provided files.
+"""
+
+import sys
+import time
+import random
+import string
+import re
+from typing import List, Dict, Any, Tuple
+
+# --- WSM Concepts (Simplified for demonstration) ---
+
+def preprocess_key(key_text: str) -> List[str]:
+    """Cleans and prepares the key text for use."""
+    translator = str.maketrans('', '', string.punctuation)
+    clean_text = key_text.translate(translator)
+    words = clean_text.lower().split()
+    return words
+
+def decrypt_beale_cipher(cipher_numbers: List[int], key_text: str) -> str:
+    """
+    Decrypts a Beale-style cipher using a key text.
+    (From SOLVEDTHEFUCKINGBEALE.txt)
+    """
+    key_words = preprocess_key(key_text)
+    decoded_message = []
+    
+    if not key_words:
+        return ""
+
+    for number in cipher_numbers:
+        index = number - 1
+        if 0 <= index < len(key_words):
+            word = key_words[index]
+            if word:
+                decoded_message.append(word[0])
+    
+    return "".join(decoded_message)
+
+def calculate_harmonicity_score(state: Dict[str, Any]) -> float:
+    """
+    Calculates a conceptual 'harmonicity' score for a given state.
+    This simulates the core WSM principle of finding a coherent,
+    stable solution. A higher score is better.
+    """
+    coherence = state.get("coherence", 0.0)
+    diversity = state.get("diversity", 0.0)
+    
+    # Simple objective function based on your provided files
+    J = (0.45 * coherence) + (0.35 * diversity)
+    
+    # We penalize 'instability' which is inverse of coherence
+    J -= (1.0 - coherence)
+    
+    return max(0.0, J)
+
+# --- Oracle Backend Core ---
+
+class WSMOracle:
+    """
+    Represents a dedicated WSM Oracle for a specific computational task.
+    """
+    def __init__(self, task_name: str, initial_state: Dict[str, Any]):
+        self.task_name = task_name
+        self.state = initial_state
+        self.history = []
+        
+    def _propose_update(self) -> Dict[str, Any]:
+        """
+        Simulates the generation of a new potential state.
+        This is the core of the WSM's generative process.
+        """
+        new_state = self.state.copy()
+        
+        # Simulating a random mutation for the search process
+        new_coherence = random.uniform(
+            max(0.0, new_state["coherence"] - 0.1),
+            min(1.0, new_state["coherence"] + 0.1)
+        )
+        new_diversity = random.uniform(0.0, 1.0)
+        
+        new_state["coherence"] = new_coherence
+        new_state["diversity"] = new_diversity
+        
+        return new_state
+
+    def _accept_update(self, new_state: Dict[str, Any]) -> bool:
+        """
+        Determines whether to accept a new state based on a simplified
+        Harmonic Control Law (HCL).
+        """
+        current_score = calculate_harmonicity_score(self.state)
+        proposed_score = calculate_harmonicity_score(new_state)
+        
+        # Simple Metropolis-Hastings-like acceptance rule
+        # Always accept if the new score is better. Sometimes accept if it's worse
+        # to escape local maxima.
+        if proposed_score >= current_score:
+            return True
+        else:
+            return random.random() < (proposed_score / current_score)
+
+    def run_step(self) -> Dict[str, Any]:
+        """Runs a single step of the iterative refinement process."""
+        proposed_state = self._propose_update()
+        accepted = self._accept_update(proposed_state)
+        
+        if accepted:
+            self.state = proposed_state
+            
+        current_score = calculate_harmonicity_score(self.state)
+        
+        log = {
+            "step": len(self.history) + 1,
+            "accepted": accepted,
+            "current_score": current_score,
+            "state_snapshot": self.state.copy()
+        }
+        self.history.append(log)
+        
+        return log
+
+# --- Main Execution Loop ---
+
+def run_for_duration(oracle: WSMOracle, duration_minutes: float):
+    """
+    Runs the WSM Oracle for a specified duration, simulating a
+    long-running task.
+    """
+    start_time = time.time()
+    end_time = start_time + (duration_minutes * 60)
+    
+    print(f"🚀 Starting WSM Oracle for task: '{oracle.task_name}'")
+    print(f"🕰️ Running for approximately {duration_minutes} minutes...")
+    
+    step = 0
+    while time.time() < end_time:
+        step += 1
+        log = oracle.run_step()
+        
+        if step % 10 == 0:
+            print(f"[{log['step']:04d}] Current Score: {log['current_score']:.4f} | Accepted: {log['accepted']}")
+            
+    print("\n✅ Task duration complete. WSM Oracle session ended.")
+    print("--- Final State ---")
+    print(f"Task Name: {oracle.task_name}")
+    print(f"Total Steps: {len(oracle.history)}")
+    print(f"Final Harmonic Score: {oracle.history[-1]['current_score']:.4f}")
+    
+    # This is where a definitive answer would be synthesized.
+    print(f"\nFinal state found: {oracle.state}")
+
+def main():
+    """Initializes and runs the prototype."""
+    
+    # 1. Define the input based on the Beale Cipher problem
+    # These are placeholders from your 'SOLVEDTHEFUCKINGBEALE.txt'
+    # In a real system, the WSM would find this.
+    key_text = "Twas brillig, and the slithy toves Did gyre and gimble in the wabe"
+    cipher_numbers = [1, 2, 3, 4, 5, 6, 7] # Placeholder numbers
+    
+    # 2. Simulate the initial WSM Oracle state for this task
+    initial_state = {
+        "coherence": 0.1,  # Low initial coherence
+        "diversity": 0.5,
+        "beale_message": decrypt_beale_cipher(cipher_numbers, key_text)
+    }
+    
+    # 3. Instantiate the WSM Oracle
+    beale_oracle = WSMOracle(
+        task_name="Beale Cipher Decryption",
+        initial_state=initial_state
+    )
+    
+    # 4. Run the oracle for a specified duration
+    # Set this to a small number for a quick demo
+    run_for_duration(beale_oracle, duration_minutes=0.01)
+
+if __name__ == "__main__":
+    main()

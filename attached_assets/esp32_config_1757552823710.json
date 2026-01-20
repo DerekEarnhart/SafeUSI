@@ -1,0 +1,84 @@
+{
+  "wifi": {
+    "ssid": "YOUR_WIFI_SSID",
+    "password": "YOUR_WIFI_PASSWORD"
+  },
+  "server": {
+    "url": "http://192.168.1.100:5000/ingest",
+    "port": 5000
+  },
+  "device": {
+    "id": "esp32_harmonic_001",
+    "name": "Harmonic Sensor Node",
+    "location": "Lab/Office",
+    "version": "1.0.0"
+  },
+  "sensors": {
+    "temperature_humidity": {
+      "enabled": true,
+      "pin": 4,
+      "type": "DHT22",
+      "interval": 5000
+    },
+    "pressure": {
+      "enabled": true,
+      "i2c_address": "0x76",
+      "type": "BMP280",
+      "interval": 5000
+    },
+    "light": {
+      "enabled": true,
+      "pin": 34,
+      "type": "LDR",
+      "interval": 1000
+    },
+    "motion": {
+      "enabled": true,
+      "pin": 2,
+      "type": "PIR",
+      "interval": 100
+    },
+    "sound": {
+      "enabled": false,
+      "pin": 35,
+      "type": "Analog",
+      "interval": 1000
+    },
+    "vibration": {
+      "enabled": false,
+      "pin": 36,
+      "type": "Analog",
+      "interval": 1000
+    },
+    "magnetic_field": {
+      "enabled": false,
+      "i2c_address": "0x1E",
+      "type": "HMC5883L",
+      "interval": 1000
+    }
+  },
+  "transmission": {
+    "interval": 30000,
+    "retry_attempts": 3,
+    "timeout": 10000
+  },
+  "harmonic_analysis": {
+    "enabled": true,
+    "framework": "HUF",
+    "state_machine": "WSM",
+    "quantum_resonance": true,
+    "weyl_state_tracking": true
+  },
+  "storage": {
+    "local_backup": true,
+    "eeprom_slots": 10,
+    "sd_card": false
+  },
+  "led": {
+    "enabled": true,
+    "pin": 5,
+    "status_blink": true,
+    "motion_blink": true,
+    "transmission_blink": true
+  }
+}

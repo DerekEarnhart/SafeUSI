@@ -1,0 +1,641 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(218, 25%, 8%);
+  --foreground: hsl(213, 31%, 91%);
+  --card: hsl(217, 19%, 12%);
+  --card-foreground: hsl(213, 31%, 91%);
+  --popover: hsl(217, 19%, 12%);
+  --popover-foreground: hsl(213, 31%, 91%);
+  --primary: hsl(187, 100%, 50%);
+  --primary-foreground: hsl(218, 25%, 8%);
+  --secondary: hsl(237, 83%, 67%);
+  --secondary-foreground: hsl(213, 31%, 91%);
+  --muted: hsl(217, 19%, 18%);
+  --muted-foreground: hsl(213, 13%, 65%);
+  --accent: hsl(142, 76%, 36%);
+  --accent-foreground: hsl(213, 31%, 91%);
+  --destructive: hsl(38, 92%, 50%);
+  --destructive-foreground: hsl(218, 25%, 8%);
+  --border: hsl(217, 19%, 18%);
+  --input: hsl(217, 19%, 18%);
+  --ring: hsl(187, 100%, 50%);
+  --chart-1: hsl(187, 100%, 50%);
+  --chart-2: hsl(142, 76%, 36%);
+  --chart-3: hsl(38, 92%, 50%);
+  --chart-4: hsl(237, 83%, 67%);
+  --chart-5: hsl(341, 75%, 51%);
+  --sidebar: hsl(217, 19%, 12%);
+  --sidebar-foreground: hsl(213, 31%, 91%);
+  --sidebar-primary: hsl(187, 100%, 50%);
+  --sidebar-primary-foreground: hsl(218, 25%, 8%);
+  --sidebar-accent: hsl(217, 19%, 18%);
+  --sidebar-accent-foreground: hsl(213, 31%, 91%);
+  --sidebar-border: hsl(217, 19%, 18%);
+  --sidebar-ring: hsl(187, 100%, 50%);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: 'JetBrains Mono', Monaco, monospace;
+  --radius: 12px;
+  --shadow-2xs: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00), 0px 1px 2px -1px hsl(187, 100%, 50%, 0.00);
+  --shadow: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00), 0px 1px 2px -1px hsl(187, 100%, 50%, 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00), 0px 2px 4px -1px hsl(187, 100%, 50%, 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00), 0px 4px 6px -1px hsl(187, 100%, 50%, 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00), 0px 8px 10px -1px hsl(187, 100%, 50%, 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(187, 100%, 50%, 0.00);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+  
+  /* Quantum-specific color variables */
+  --quantum-blue: hsl(218, 100%, 8%);
+  --quantum-cyan: hsl(187, 100%, 50%);
+  --quantum-purple: hsl(237, 83%, 67%);
+  --quantum-green: hsl(142, 76%, 36%);
+  --quantum-amber: hsl(38, 92%, 50%);
+}
+
+.dark {
+  --background: hsl(218, 25%, 8%);
+  --foreground: hsl(213, 31%, 91%);
+  --card: hsl(217, 19%, 12%);
+  --card-foreground: hsl(213, 31%, 91%);
+  --popover: hsl(217, 19%, 12%);
+  --popover-foreground: hsl(213, 31%, 91%);
+  --primary: hsl(187, 100%, 50%);
+  --primary-foreground: hsl(218, 25%, 8%);
+  --secondary: hsl(237, 83%, 67%);
+  --secondary-foreground: hsl(213, 31%, 91%);
+  --muted: hsl(217, 19%, 18%);
+  --muted-foreground: hsl(213, 13%, 65%);
+  --accent: hsl(142, 76%, 36%);
+  --accent-foreground: hsl(213, 31%, 91%);
+  --destructive: hsl(38, 92%, 50%);
+  --destructive-foreground: hsl(218, 25%, 8%);
+  --border: hsl(217, 19%, 18%);
+  --input: hsl(217, 19%, 18%);
+  --ring: hsl(187, 100%, 50%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    background: linear-gradient(135deg, var(--background) 0%, hsl(218, 25%, 6%) 100%);
+  }
+}
+
+/* Quantum-themed animations and effects */
+.glow-effect {
+  box-shadow: 0 0 20px rgba(0, 245, 255, 0.3), 0 0 40px rgba(0, 245, 255, 0.1);
+}
+
+.harmonic-wave {
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(0, 245, 255, 0.1) 25%, 
+    rgba(99, 102, 241, 0.2) 50%, 
+    rgba(0, 245, 255, 0.1) 75%, 
+    transparent 100%);
+  animation: wave 3s ease-in-out infinite;
+}
+
+@keyframes wave {
+  0%, 100% { transform: translateX(-100%); }
+  50% { transform: translateX(100%); }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-glow {
+  from { box-shadow: 0 0 10px rgba(0, 245, 255, 0.3); }
+  to { box-shadow: 0 0 30px rgba(0, 245, 255, 0.6), 0 0 60px rgba(0, 245, 255, 0.2); }
+}
+
+.coherence-meter {
+  background: linear-gradient(90deg, 
+    hsl(142, 76%, 36%) 0%, 
+    hsl(187, 100%, 50%) 50%, 
+    hsl(237, 83%, 67%) 100%);
+}
+
+.quantum-grid {
+  background-image: 
+    linear-gradient(rgba(0, 245, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 245, 255, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.status-indicator {
+  position: relative;
+  overflow: hidden;
+}
+
+.status-indicator::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  animation: scan 3s infinite;
+}
+
+@keyframes scan {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+.waveform-container {
+  height: 60px;
+  background: linear-gradient(to right, 
+    rgba(0, 245, 255, 0.1) 0%,
+    rgba(99, 102, 241, 0.2) 50%,
+    rgba(0, 245, 255, 0.1) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.processing-flow {
+  background: linear-gradient(90deg, 
+    rgba(0, 245, 255, 0.1) 0%,
+    rgba(99, 102, 241, 0.1) 33%,
+    rgba(16, 185, 129, 0.1) 66%,
+    rgba(0, 245, 255, 0.1) 100%);
+}
+
+/* Gradient text effects */
+.gradient-text-primary {
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Harmonic state visualization */
+.harmonic-state-display {
+  font-family: var(--font-mono);
+  color: var(--primary);
+  font-size: 1.125rem;
+  line-height: 1.5;
+}
+
+/* Component status indicators */
+.component-active {
+  color: var(--accent);
+}
+
+.component-ready {
+  color: var(--primary);
+}
+
+.component-inactive {
+  color: var(--muted-foreground);
+}
+
+/* Quantum-themed borders and effects */
+.quantum-border {
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.quantum-border:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 15px rgba(0, 245, 255, 0.2);
+  transition: all 0.3s ease;
+}
+
+/* HUS-inspired Glass Morphism & Interactive Effects */
+#living-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+}
+
+.glass-card {
+  background: rgba(30, 41, 59, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  box-shadow: 0 8px 32px rgba(0, 245, 255, 0.1);
+}
+
+.glass-card:hover {
+  border-color: rgba(0, 245, 255, 0.4);
+  box-shadow: 0 12px 40px rgba(0, 245, 255, 0.2);
+  transform: translateY(-2px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tagline-gradient {
+  background: linear-gradient(45deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.icon-wrapper {
+  background: linear-gradient(135deg, rgba(0, 245, 255, 0.2), rgba(99, 102, 241, 0.2));
+}
+
+.btn-primary {
+  background: linear-gradient(45deg, var(--primary), var(--secondary));
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 245, 255, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 245, 255, 0.4);
+}
+
+.section-title {
+  border-bottom: 2px solid var(--primary);
+  padding-bottom: 0.5rem;
+}
+
+/* Command Palette Styles */
+.command-palette-backdrop {
+  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.command-palette-content {
+  background: rgba(30, 41, 59, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  box-shadow: 0 20px 60px rgba(0, 245, 255, 0.3);
+}
+
+/* Enhanced Transitions */
+.transition-glass {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-glass:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 40px rgba(0, 245, 255, 0.2);
+}
+
+/* Floating Animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.float-animation {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Particle System Animation Support */
+.particle-canvas {
+  pointer-events: none;
+}
+
+/* Tab Navigation Enhancement */
+.nav-tab {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.nav-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+}
+
+.nav-tab:hover {
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+
+/* PWA Modal Styles */
+.modal-backdrop {
+  backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.modal-content {
+  background: var(--card);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.8);
+}
+
+/* ===== FRACTAL BACKGROUND ANIMATIONS ===== */
+
+/* Main fractal container */
+.fractal-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  overflow: hidden;
+  background: radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+              radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
+              radial-gradient(circle at 40% 40%, rgba(120, 198, 121, 0.3) 0%, transparent 50%),
+              linear-gradient(135deg, rgba(0, 0, 0, 0.9) 0%, rgba(16, 24, 39, 0.95) 100%);
+}
+
+/* Fractal geometric patterns */
+.fractal-layer {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.4;
+}
+
+.fractal-layer::before,
+.fractal-layer::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: linear-gradient(45deg, 
+    rgba(59, 130, 246, 0.4) 0%, 
+    rgba(147, 51, 234, 0.3) 25%, 
+    rgba(236, 72, 153, 0.4) 50%, 
+    rgba(34, 197, 94, 0.3) 75%, 
+    rgba(251, 191, 36, 0.4) 100%);
+  filter: blur(2px);
+  animation: fractal-rotate 20s linear infinite;
+}
+
+.fractal-layer::before {
+  width: 600px;
+  height: 600px;
+  top: -300px;
+  left: -300px;
+  animation-delay: 0s;
+}
+
+.fractal-layer::after {
+  width: 800px;
+  height: 800px;
+  bottom: -400px;
+  right: -400px;
+  animation-delay: -10s;
+  animation-direction: reverse;
+}
+
+/* Secondary fractal layer */
+.fractal-layer-2 {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.3;
+  animation: fractal-drift 30s ease-in-out infinite;
+}
+
+.fractal-layer-2::before,
+.fractal-layer-2::after {
+  content: '';
+  position: absolute;
+  background: conic-gradient(from 0deg, 
+    rgba(59, 130, 246, 0.5) 0deg,
+    rgba(147, 51, 234, 0.3) 72deg,
+    rgba(236, 72, 153, 0.4) 144deg,
+    rgba(34, 197, 94, 0.3) 216deg,
+    rgba(251, 191, 36, 0.5) 288deg,
+    rgba(59, 130, 246, 0.5) 360deg);
+  border-radius: 50%;
+  filter: blur(3px);
+  animation: fractal-pulse 15s ease-in-out infinite;
+}
+
+.fractal-layer-2::before {
+  width: 400px;
+  height: 400px;
+  top: 20%;
+  right: 10%;
+  animation-delay: -5s;
+}
+
+.fractal-layer-2::after {
+  width: 300px;
+  height: 300px;
+  bottom: 30%;
+  left: 20%;
+  animation-delay: -12s;
+}
+
+/* Geometric fractal shapes */
+.fractal-triangles {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.2;
+}
+
+.fractal-triangle {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  animation: fractal-float 25s ease-in-out infinite;
+}
+
+.fractal-triangle:nth-child(1) {
+  border-left: 50px solid transparent;
+  border-right: 50px solid transparent;
+  border-bottom: 86px solid rgba(59, 130, 246, 0.3);
+  top: 10%;
+  left: 15%;
+  animation-delay: 0s;
+}
+
+.fractal-triangle:nth-child(2) {
+  border-left: 30px solid transparent;
+  border-right: 30px solid transparent;
+  border-bottom: 52px solid rgba(147, 51, 234, 0.3);
+  top: 60%;
+  right: 20%;
+  animation-delay: -8s;
+}
+
+.fractal-triangle:nth-child(3) {
+  border-left: 40px solid transparent;
+  border-right: 40px solid transparent;
+  border-bottom: 69px solid rgba(34, 197, 94, 0.3);
+  bottom: 20%;
+  left: 60%;
+  animation-delay: -15s;
+}
+
+/* Hexagonal fractal pattern */
+.fractal-hexagons {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.15;
+}
+
+.fractal-hexagon {
+  position: absolute;
+  width: 80px;
+  height: 46px;
+  background: linear-gradient(45deg, rgba(236, 72, 153, 0.4), rgba(251, 191, 36, 0.3));
+  margin: 23px 0;
+  transform: rotate(30deg);
+  animation: fractal-spin 35s linear infinite;
+}
+
+.fractal-hexagon::before,
+.fractal-hexagon::after {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-left: 40px solid transparent;
+  border-right: 40px solid transparent;
+}
+
+.fractal-hexagon::before {
+  bottom: 100%;
+  border-bottom: 23px solid rgba(236, 72, 153, 0.4);
+}
+
+.fractal-hexagon::after {
+  top: 100%;
+  border-top: 23px solid rgba(251, 191, 36, 0.3);
+}
+
+.fractal-hexagon:nth-child(1) {
+  top: 15%;
+  right: 25%;
+  animation-delay: 0s;
+}
+
+.fractal-hexagon:nth-child(2) {
+  bottom: 25%;
+  left: 30%;
+  animation-delay: -12s;
+}
+
+.fractal-hexagon:nth-child(3) {
+  top: 45%;
+  left: 10%;
+  animation-delay: -24s;
+}
+
+/* Fractal animation keyframes */
+@keyframes fractal-rotate {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes fractal-drift {
+  0%, 100% { transform: translateX(0) translateY(0) rotate(0deg); }
+  25% { transform: translateX(30px) translateY(-20px) rotate(90deg); }
+  50% { transform: translateX(-20px) translateY(30px) rotate(180deg); }
+  75% { transform: translateX(-30px) translateY(-10px) rotate(270deg); }
+}
+
+@keyframes fractal-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+@keyframes fractal-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-20px) rotate(10deg); }
+  50% { transform: translateY(10px) rotate(-5deg); }
+  75% { transform: translateY(-10px) rotate(5deg); }
+}
+
+@keyframes fractal-spin {
+  0% { transform: rotate(30deg); }
+  100% { transform: rotate(390deg); }
+}
+
+/* Quantum particle effect */
+.quantum-particles {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  opacity: 0.6;
+}
+
+.quantum-particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: linear-gradient(45deg, #00f5ff, #ff6b6b, #4ecdc4, #45b7d1);
+  border-radius: 50%;
+  animation: particle-float 8s linear infinite;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.quantum-particle:nth-child(1) { left: 10%; animation-delay: 0s; animation-duration: 6s; }
+.quantum-particle:nth-child(2) { left: 20%; animation-delay: -1s; animation-duration: 8s; }
+.quantum-particle:nth-child(3) { left: 30%; animation-delay: -2s; animation-duration: 7s; }
+.quantum-particle:nth-child(4) { left: 40%; animation-delay: -3s; animation-duration: 9s; }
+.quantum-particle:nth-child(5) { left: 50%; animation-delay: -4s; animation-duration: 6s; }
+.quantum-particle:nth-child(6) { left: 60%; animation-delay: -5s; animation-duration: 8s; }
+.quantum-particle:nth-child(7) { left: 70%; animation-delay: -6s; animation-duration: 7s; }
+.quantum-particle:nth-child(8) { left: 80%; animation-delay: -7s; animation-duration: 9s; }
+.quantum-particle:nth-child(9) { left: 90%; animation-delay: -8s; animation-duration: 6s; }
+
+@keyframes particle-float {
+  0% { 
+    transform: translateY(100vh) translateX(0) scale(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  90% {
+    opacity: 1;
+  }
+  100% { 
+    transform: translateY(-10vh) translateX(100px) scale(0);
+    opacity: 0;
+  }
+}
+
+/* Professional glassmorphism effects */
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+}
+
+.glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+}
+
+/* Enhanced shadow effects */
+.professional-shadow {
+  box-shadow: 
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 2px 4px rgba(0, 0, 0, 0.1),
+    0 8px 16px rgba(0, 0, 0, 0.1),
+    0 16px 32px rgba(0, 0, 0, 0.1);
+}

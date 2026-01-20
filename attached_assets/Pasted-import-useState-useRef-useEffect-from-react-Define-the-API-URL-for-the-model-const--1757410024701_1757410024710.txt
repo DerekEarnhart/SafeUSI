@@ -1,0 +1,328 @@
+import { useState, useRef, useEffect } from 'react';
+
+// Define the API URL for the model.
+const MODEL_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=";
+const API_KEY = ""; // Canvas will provide this in the runtime
+
+// Main application component
+export default function App() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [zipFiles, setZipFiles] = useState(null);
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [showMathRigor, setShowMathRigor] = useState(false);
+  const [isLibraryReady, setIsLibraryReady] = useState(false);
+  const messagesEndRef = useRef(null);
+  const [isTooling, setIsTooling] = useState(false);
+  const [googleSearchData, setGoogleSearchData] = useState([]);
+
+  useEffect(() => {
+    // Scroll to the latest message
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Check for library readiness on mount
+  useEffect(() => {
+    const checkLibraries = () => {
+      if (typeof JSZip !== 'undefined' && typeof saveAs !== 'undefined') {
+        setIsLibraryReady(true);
+      } else {
+        setTimeout(checkLibraries, 100); // Check again after 100ms
+      }
+    };
+    checkLibraries();
+  }, []);
+
+  // Function to call the model with a given prompt
+  const callModel = async (prompt, isToolCall = false, toolCode = null) => {
+    const history = messages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'model',
+      parts: [{ text: m.text }]
+    }));
+    
+    // Add user prompt to history
+    history.push({ role: 'user', parts: [{ text: prompt }] });
+    
+    // Add tool code to history if it's a tool call
+    if (isToolCall && toolCode) {
+      history.push({
+        role: 'user',
+        parts: [{
+          text: `
+          \`\`\`tool_code
+          print(google_search.search(queries=["${prompt}"]))
+          \`\`\`
+          `
+        }]
+      });
+    }
+
+    const payload = {
+      contents: history,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            report_text: { type: "STRING" },
+            reasoning: { type: "STRING" },
+            math_rigor: { type: "STRING" }
+          },
+          "propertyOrdering": ["report_text", "reasoning", "math_rigor"]
+        }
+      }
+    };
+
+    const maxRetries = 5;
+    let attempts = 0;
+
+    while (attempts < maxRetries) {
+      try {
+        const response = await fetch(MODEL_API_URL + API_KEY, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          if (response.status === 429 && attempts < maxRetries - 1) {
+            const delay = Math.pow(2, attempts) * 1000;
+            console.warn(`Rate limit exceeded. Retrying in ${delay / 1000}s...`);
+            await new Promise(res => setTimeout(res, delay));
+            attempts++;
+            continue;
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!jsonText) {
+          throw new Error("API returned no valid JSON response.");
+        }
+
+        return JSON.parse(jsonText);
+      } catch (error) {
+        console.error("API call failed:", error);
+        attempts++;
+        if (attempts >= maxRetries) {
+          throw new Error(`Failed to fetch after ${maxRetries} attempts: ${error.message}`);
+        }
+      }
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMessage = { role: 'user', text: input.trim() };
+    setMessages(prevMessages => [...prevMessages, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    // Reset visibility of reasoning/math rigor for new query
+    setShowReasoning(false);
+    setShowMathRigor(false);
+
+    try {
+      // Logic to determine if a search is needed
+      const searchKeywords = ['research', 'find', 'latest', 'news', 'data', 'information about'];
+      const needsSearch = searchKeywords.some(keyword => input.toLowerCase().includes(keyword));
+
+      let aiResponse;
+      if (needsSearch) {
+        setIsTooling(true);
+        const searchPrompt = `search for: ${input}`;
+        const searchResults = await callModel(searchPrompt, true, `print(google_search.search(queries=["${input}"]))`);
+        setGoogleSearchData(searchResults);
+        setIsTooling(false);
+        aiResponse = searchResults; // Assume searchResults has the same structure for now
+      } else {
+        const prompt = `You are a highly intelligent auto-researcher tool. Your task is to respond to user requests related to research, file analysis, and code manipulation.
+        User request: "${userMessage.text}"
+        
+        Based on the request, provide your output in a JSON object with the following keys:
+        - 'report_text': A brief, professional research report (approx. 200 words) on the topic, or a general response for non-research topics.
+        - 'reasoning': A detailed explanation of the reasoning used to generate the report_text. Explain the key concepts and how they relate to the topic.
+        - 'math_rigor': A section that explains the mathematical foundations, principles, or any relevant operator algebras and lemmas that ground the response in verifiable fact. If not applicable, state "N/A".
+        
+        For example, for a report on quantum computing, the math_rigor section might mention topics like Hilbert spaces, quantum gates as unitary operators, and the no-cloning theorem. Ensure your response is grounded in facts to avoid hallucination.`;
+        aiResponse = await callModel(prompt);
+      }
+      
+      const aiMessage = {
+        role: 'model',
+        text: aiResponse.report_text,
+        reasoning: aiResponse.reasoning,
+        math_rigor: aiResponse.math_rigor,
+      };
+      setMessages(prevMessages => [...prevMessages, aiMessage]);
+
+    } catch (e) {
+      const errorMessage = { role: 'model', text: `An error occurred: ${e.message}` };
+      setMessages(prevMessages => [...prevMessages, errorMessage]);
+    } finally {
+      setIsLoading(false);
+      setIsTooling(false);
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const files = e.target.files;
+    if (files.length === 0) return;
+
+    const uploadedFiles = Array.from(files);
+    
+    // Simulate analyzing the uploaded files and preparing them for a "ZIP" action.
+    const zip = new JSZip();
+    uploadedFiles.forEach(file => {
+      zip.file(file.name, file);
+    });
+    setZipFiles(zip);
+    
+    const fileNames = uploadedFiles.map(f => f.name).join(', ');
+    const userMessage = { role: 'user', text: `I have uploaded the following files for analysis: ${fileNames}` };
+    const aiMessage = { role: 'model', text: `Thank you. I have received the files: ${fileNames}. I'm ready to proceed with analysis, debugging, or research. For instance, you could ask me to "analyze the Python script" or "find research papers related to these documents".` };
+
+    setMessages(prevMessages => [...prevMessages, userMessage, aiMessage]);
+  };
+
+  const handleDownloadZip = async () => {
+    if (!zipFiles) {
+      setMessages(prevMessages => [...prevMessages, { role: 'model', text: "No files have been uploaded yet to compress." }]);
+      return;
+    }
+
+    setIsLoading(true);
+    const userMessage = { role: 'user', text: "Please compress the uploaded files into a single ZIP archive for download." };
+    setMessages(prevMessages => [...prevMessages, userMessage]);
+
+    try {
+      const zipBlob = await zipFiles.generateAsync({ type: 'blob' });
+      saveAs(zipBlob, 'research-project.zip');
+      const aiMessage = { role: 'model', text: "The files have been successfully compressed and prepared for download. A ZIP file named `research-project.zip` has been created." };
+      setMessages(prevMessages => [...prevMessages, aiMessage]);
+    } catch (e) {
+      const errorMessage = { role: 'model', text: `An error occurred while compressing files: ${e.message}` };
+      setMessages(prevMessages => [...prevMessages, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-950 text-gray-100 p-4 font-sans">
+      <div className="flex-1 flex flex-col max-w-4xl mx-auto rounded-xl shadow-2xl bg-gray-900 border border-gray-700">
+        
+        {/* Header */}
+        <header className="p-4 bg-gray-800 rounded-t-xl border-b border-gray-700 flex items-center justify-between">
+          <div className="flex items-center">
+            <i className="fas fa-microchip text-purple-400 text-2xl mr-3 animate-pulse"></i>
+            <h1 className="text-xl md:text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-500">
+              Harmonic AGI Auto-Researcher
+            </h1>
+          </div>
+          <div className="flex items-center space-x-2">
+            <label className={`py-2 px-4 rounded-lg cursor-pointer transition-colors
+              ${isLibraryReady ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-600 text-gray-400 cursor-not-allowed'}`}
+            >
+              <input type="file" multiple onChange={handleFileUpload} className="hidden" disabled={!isLibraryReady} />
+              <i className="fas fa-upload mr-2"></i> {isLibraryReady ? 'Upload Files' : 'Loading Libraries...'}
+            </label>
+            <button
+              onClick={() => setShowReasoning(!showReasoning)}
+              className={`py-2 px-4 rounded-lg font-semibold transition-all duration-300
+                ${showReasoning ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+            >
+              <i className="fas fa-brain mr-2"></i> Show Reasoning
+            </button>
+            <button
+              onClick={() => setShowMathRigor(!showMathRigor)}
+              className={`py-2 px-4 rounded-lg font-semibold transition-all duration-300
+                ${showMathRigor ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+            >
+              <i className="fas fa-square-root-alt mr-2"></i> Show Math Rigor
+            </button>
+            <button
+              onClick={handleDownloadZip}
+              className={`py-2 px-4 rounded-lg font-semibold transition-all duration-300
+                ${zipFiles && isLibraryReady ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md' : 'bg-gray-600 text-gray-400 cursor-not-allowed'}`}
+              disabled={!zipFiles || isLoading || !isLibraryReady}
+            >
+              <i className="fas fa-download mr-2"></i> Download ZIP
+            </button>
+          </div>
+        </header>
+        
+        {/* Chat window */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div
+                className={`p-4 rounded-lg shadow-md max-w-lg transition-transform transform duration-300 ease-out
+                  ${msg.role === 'user'
+                    ? 'bg-purple-600 text-white self-end rounded-br-none'
+                    : 'bg-gray-700 text-gray-100 self-start rounded-bl-none'
+                  }
+                  ${isLoading && index === messages.length - 1 && msg.role === 'model' ? 'animate-pulse' : ''}
+                `}
+              >
+                <p className="text-sm md:text-base whitespace-pre-wrap">{msg.text}</p>
+                
+                {msg.role === 'model' && showReasoning && msg.reasoning && (
+                  <div className="mt-4 p-3 bg-gray-800 rounded-lg text-xs md:text-sm border border-gray-600">
+                    <strong className="text-purple-400">Reasoning:</strong>
+                    <p className="mt-1 whitespace-pre-wrap">{msg.reasoning}</p>
+                  </div>
+                )}
+                
+                {msg.role === 'model' && showMathRigor && msg.math_rigor && (
+                  <div className="mt-4 p-3 bg-gray-800 rounded-lg text-xs md:text-sm border border-gray-600">
+                    <strong className="text-purple-400">Mathematical Rigor:</strong>
+                    <p className="mt-1 whitespace-pre-wrap">{msg.math_rigor}</p>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="p-4 rounded-lg shadow-md max-w-lg transition-transform transform duration-300 ease-out bg-gray-700 text-gray-100 self-start rounded-bl-none animate-pulse">
+                <p className="text-sm md:text-base">
+                  {isTooling ? 'Accessing tools...' : 'Generating response...'}
+                </p>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+        
+        {/* Input area */}
+        <div className="p-4 bg-gray-800 rounded-b-xl border-t border-gray-700 flex">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            placeholder={isLoading ? "Generating response..." : "Ask me to research, analyze a file, or create a report..."}
+            className="flex-1 p-3 rounded-l-lg bg-gray-700 text-gray-100 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors"
+            disabled={isLoading}
+          />
+          <button
+            onClick={handleSendMessage}
+            className={`p-3 rounded-r-lg font-bold transition-colors duration-200
+              ${isLoading ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-700'}`}
+            disabled={isLoading}
+          >
+            <i className="fas fa-paper-plane"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WSM Manifest",
+  "type": "object",
+  "required": [
+    "system",
+    "operators",
+    "compositions",
+    "policies"
+  ],
+  "properties": {
+    "system": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "param_hash_pre",
+        "param_hash_post"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "param_hash_pre": {
+          "type": "string"
+        },
+        "param_hash_post": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "operators": {
+      "type": "object",
+      "properties": {
+        "kin": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "macros": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "phrase_macros": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "compositions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "policies": {
+      "type": "object",
+      "properties": {
+        "no_training": {
+          "type": "boolean"
+        },
+        "energy_cap_j": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}

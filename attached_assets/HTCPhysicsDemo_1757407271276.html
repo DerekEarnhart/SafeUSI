@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTC Framework + Physics Sandbox Demo</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .physics-canvas {
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+        .framework-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+        const { Play, Pause, Sparkles, Zap, Settings, ShieldCheck, RotateCcw, Download, Upload, KeyRound, Bot, Brain, Atom, Cpu } = lucide;
+
+        // HTC Framework Map Component
+        function HTCFrameworkMap() {
+            const W = 1200;
+            const H = 600;
+            
+            function Box({ x, y, w, h, title, subtitle, color = "#8b5cf6", gradient = false }) {
+                return (
+                    <g transform={`translate(${x}, ${y})`}>
+                        {gradient && (
+                            <defs>
+                                <linearGradient id={`grad-${x}-${y}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+                                    <stop offset="100%" stopColor={color} stopOpacity="0.05" />
+                                </linearGradient>
+                            </defs>
+                        )}
+                        <rect 
+                            rx="12" 
+                            ry="12" 
+                            width={w} 
+                            height={h} 
+                            fill={gradient ? `url(#grad-${x}-${y})` : color} 
+                            opacity={gradient ? 1 : 0.12} 
+                            stroke={color} 
+                            strokeWidth={2} 
+                        />
+                        <text x={16} y={28} fontSize={14} fontWeight={700} fill="#EDE9FE">{title}</text>
+                        {subtitle && (
+                            <text x={16} y={48} fontSize={11} fill="#C4B5FD">{subtitle}</text>
+                        )}
+                    </g>
+                );
+            }
+
+            function Arrow({ x1, y1, x2, y2, dashed = false, label, color = "#E5E7EB", thickness = 2.2 }) {
+                const id = `arrow-${x1}-${y1}-${x2}-${y2}-${label?.replace(/\s+/g, "-")}`;
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+                return (
+                    <g transform={`translate(${x1}, ${y1}) rotate(${angle})`}>
+                        <defs>
+                            <marker id={id} markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill={color} />
+                            </marker>
+                        </defs>
+                        <line 
+                            x1={0} 
+                            y1={0} 
+                            x2={len - 12} 
+                            y2={0} 
+                            stroke={color} 
+                            strokeWidth={thickness} 
+                            strokeDasharray={dashed ? "6 6" : undefined} 
+                            markerEnd={`url(#${id})`} 
+                        />
+                        {label && (
+                            <text x={(len - 12) / 2} y={-8} textAnchor="middle" fontSize={10} fill={color}>{label}</text>
+                        )}
+                    </g>
+                );
+            }
+
+            return (
+                <div className="framework-card rounded-2xl p-6">
+                    <h2 className="text-xl font-bold mb-4 gradient-text">HTC Framework: Unifying GR & QM</h2>
+                    <svg width={W} height={H} className="bg-gradient-to-b from-slate-950 to-slate-900 rounded-xl">
+                        {/* Unification Core */}
+                        <Box x={40} y={40} w={1120} h={160} title="Quantum Harmonic Topological Field Theory (QHTFT)" 
+                             subtitle="Unified Field Equation: R_μν - ½R g_μν + Λg_μν = 8πG(T_μν^quantum + T_μν^comp)" 
+                             color="#a855f7" gradient={true} />
+                        
+                        {/* Core Components */}
+                        <Box x={60} y={80} w={300} h={100} title="Harmonic Principle" 
+                             subtitle="Δ_E σ = 0 • Self-correction • Stability" 
+                             color="#8b5cf6" />
+                        
+                        <Box x={400} y={80} w={300} h={100} title="Topological Invariants" 
+                             subtitle="Background Independence • Error Immunity" 
+                             color="#7c3aed" />
+                        
+                        <Box x={740} y={80} w={300} h={100} title="T_μν^comp Tensor" 
+                             subtitle="Information → Gravity • Pancomputational" 
+                             color="#6d28d9" />
+
+                        {/* Theoretical Foundations */}
+                        <Box x={40} y={240} w={540} h={120} title="Harmonic Algebra (HA)" 
+                             subtitle="Algebraic Rings • Coherent States • Spectral Properties" 
+                             color="#22d3ee" />
+                        
+                        <Box x={620} y={240} w={540} h={120} title="Quantum Computation Integration" 
+                             subtitle="Quantum Algorithms • CVQC • Gravitational Awareness" 
+                             color="#06b6d4" />
+
+                        {/* Physics Application */}
+                        <Box x={40} y={400} w={1120} h={120} title="Physics Sandbox Application" 
+                             subtitle="Three.js + cannon-es • LLM Planning • Real-time Simulation" 
+                             color="#10b981" gradient={true} />
+
+                        {/* Connection Arrows */}
+                        <Arrow x1={210} y1={130} x2={400} y2={130} label="stability" color="#a855f7" />
+                        <Arrow x1={550} y1={130} x2={740} y2={130} label="robustness" color="#a855f7" />
+                        <Arrow x1={890} y1={130} x2={210} y2={130} label="unification" color="#a855f7" thickness={3} />
+                        
+                        <Arrow x1={310} y1={300} x2={210} y2={180} label="mathematical tools" color="#22d3ee" />
+                        <Arrow x1={890} y1={300} x2={890} y2={180} label="quantum algorithms" color="#06b6d4" />
+                        <Arrow x1={600} y1={300} x2={600} y2={180} label="harmonic coherence" color="#a855f7" />
+                        
+                        <Arrow x1={600} y1={400} x2={310} y2={300} label="applied mathematics" color="#10b981" />
+                        <Arrow x1={600} y1={400} x2={890} y2={300} label="quantum simulation" color="#10b981" />
+                    </svg>
+                </div>
+            );
+        }
+
+        // Simplified Physics Sandbox Component
+        function PhysicsSandbox() {
+            const canvasRef = useRef(null);
+            const [isRunning, setIsRunning] = useState(true);
+            const [objectCount, setObjectCount] = useState(0);
+            const [energy, setEnergy] = useState(0);
+
+            useEffect(() => {
+                if (!canvasRef.current) return;
+
+                // Three.js setup
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color('#0b0b12');
+
+                const camera = new THREE.PerspectiveCamera(75, canvasRef.current.clientWidth / canvasRef.current.clientHeight, 0.1, 1000);
+                camera.position.set(10, 10, 10);
+
+                const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, antialias: true });
+                renderer.setSize(canvasRef.current.clientWidth, canvasRef.current.clientHeight);
+
+                // Lights
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+                scene.add(ambientLight);
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(10, 10, 5);
+                scene.add(directionalLight);
+
+                // Ground plane
+                const groundGeometry = new THREE.PlaneGeometry(20, 20);
+                const groundMaterial = new THREE.MeshStandardMaterial({ color: '#23232f' });
+                const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+                ground.rotation.x = -Math.PI / 2;
+                scene.add(ground);
+
+                // Physics world
+                const world = new CANNON.World();
+                world.gravity.set(0, -9.81, 0);
+
+                // Ground body
+                const groundBody = new CANNON.Body({ mass: 0 });
+                const groundShape = new CANNON.Plane();
+                groundBody.addShape(groundShape);
+                groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+                world.addBody(groundBody);
+
+                // Objects tracking
+                const objects = new Map();
+                let objectId = 0;
+
+                // Animation loop
+                const clock = new THREE.Clock();
+                function animate() {
+                    requestAnimationFrame(animate);
+                    
+                    if (isRunning) {
+                        const delta = clock.getDelta();
+                        world.step(1/60);
+                        
+                        // Update object positions
+                        objects.forEach((obj) => {
+                            obj.mesh.position.copy(obj.body.position);
+                            obj.mesh.quaternion.copy(obj.body.quaternion);
+                        });
+                        
+                        // Update stats
+                        setObjectCount(objects.size);
+                        let totalEnergy = 0;
+                        objects.forEach((obj) => {
+                            const ke = 0.5 * obj.body.mass * obj.body.velocity.lengthSquared();
+                            const pe = -obj.body.mass * 9.81 * obj.body.position.y;
+                            totalEnergy += ke + pe;
+                        });
+                        setEnergy(Math.round(totalEnergy));
+                    }
+                    
+                    renderer.render(scene, camera);
+                }
+                animate();
+
+                // Add some initial objects
+                for (let i = 0; i < 5; i++) {
+                    const geometry = new THREE.BoxGeometry(1, 1, 1);
+                    const material = new THREE.MeshStandardMaterial({ 
+                        color: new THREE.Color().setHSL(Math.random(), 0.7, 0.5) 
+                    });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.set(Math.random() * 4 - 2, 5 + i * 1.5, Math.random() * 4 - 2);
+                    scene.add(mesh);
+
+                    const body = new CANNON.Body({ mass: 1 });
+                    const shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+                    body.addShape(shape);
+                    body.position.copy(mesh.position);
+                    world.addBody(body);
+
+                    objects.set(objectId++, { mesh, body });
+                }
+
+                // Handle window resize
+                const handleResize = () => {
+                    if (canvasRef.current) {
+                        const width = canvasRef.current.clientWidth;
+                        const height = canvasRef.current.clientHeight;
+                        camera.aspect = width / height;
+                        camera.updateProjectionMatrix();
+                        renderer.setSize(width, height);
+                    }
+                };
+                window.addEventListener('resize', handleResize);
+
+                return () => {
+                    window.removeEventListener('resize', handleResize);
+                    renderer.dispose();
+                };
+            }, [isRunning]);
+
+            return (
+                <div className="framework-card rounded-2xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-xl font-bold gradient-text">Physics Sandbox</h2>
+                        <div className="flex items-center gap-4 text-sm">
+                            <div>Objects: {objectCount}</div>
+                            <div>Energy: {energy}</div>
+                            <button 
+                                onClick={() => setIsRunning(!isRunning)}
+                                className="px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white"
+                            >
+                                {isRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                            </button>
+                        </div>
+                    </div>
+                    <canvas 
+                        ref={canvasRef} 
+                        className="physics-canvas w-full h-64"
+                        style={{ background: '#0b0b12' }}
+                    />
+                </div>
+            );
+        }
+
+        // Main Demo Component
+        function HTCDemo() {
+            const [activeTab, setActiveTab] = useState('framework');
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-indigo-950 text-white">
+                    {/* Header */}
+                    <header className="p-6 text-center">
+                        <h1 className="text-4xl font-bold mb-2 gradient-text">
+                            HTC Framework Demo
+                        </h1>
+                        <p className="text-lg text-indigo-200/90">
+                            Quantum Harmonic Topological Field Theory × Physics Sandbox
+                        </p>
+                    </header>
+
+                    {/* Navigation */}
+                    <nav className="flex justify-center mb-8">
+                        <div className="flex bg-white/10 rounded-xl p-1">
+                            <button
+                                onClick={() => setActiveTab('framework')}
+                                className={`px-6 py-2 rounded-lg transition-all ${
+                                    activeTab === 'framework' 
+                                        ? 'bg-purple-600 text-white' 
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                <Brain className="w-4 h-4 inline mr-2" />
+                                Framework
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('physics')}
+                                className={`px-6 py-2 rounded-lg transition-all ${
+                                    activeTab === 'physics' 
+                                        ? 'bg-purple-600 text-white' 
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                <Atom className="w-4 h-4 inline mr-2" />
+                                Physics
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('integration')}
+                                className={`px-6 py-2 rounded-lg transition-all ${
+                                    activeTab === 'integration' 
+                                        ? 'bg-purple-600 text-white' 
+                                        : 'text-white/70 hover:text-white'
+                                }`}
+                            >
+                                <Cpu className="w-4 h-4 inline mr-2" />
+                                Integration
+                            </button>
+                        </div>
+                    </nav>
+
+                    {/* Content */}
+                    <main className="max-w-7xl mx-auto px-6 pb-12">
+                        {activeTab === 'framework' && (
+                            <div className="space-y-8">
+                                <HTCFrameworkMap />
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="framework-card rounded-2xl p-6">
+                                        <h3 className="text-lg font-bold mb-4 text-purple-300">Theoretical Breakthrough</h3>
+                                        <p className="text-sm text-indigo-100/90 mb-3">
+                                            QHTFT introduces the computational stress-energy tensor (T_μν^comp) that directly couples 
+                                            quantum computational states to spacetime geometry, fundamentally redefining gravity's source.
+                                        </p>
+                                        <p className="text-sm text-indigo-100/90">
+                                            The harmonic principle (Δ_E σ = 0) provides intrinsic self-correction, while topological 
+                                            invariants ensure background independence and error immunity.
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="framework-card rounded-2xl p-6">
+                                        <h3 className="text-lg font-bold mb-4 text-cyan-300">Problem Resolution Status</h3>
+                                        <div className="space-y-2 text-sm">
+                                            <div className="flex justify-between">
+                                                <span className="text-indigo-100/90">Resolved Problems:</span>
+                                                <span className="text-green-400 font-semibold">5/10</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-indigo-100/90">Path Established:</span>
+                                                <span className="text-yellow-400 font-semibold">3/10</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-indigo-100/90">In Progress:</span>
+                                                <span className="text-red-400 font-semibold">2/10</span>
+                                            </div>
+                                        </div>
+                                        <p className="text-xs text-indigo-200/80 mt-3">
+                                            Including Clay Millennium Prize problems and fundamental physics challenges
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'physics' && (
+                            <div className="space-y-8">
+                                <PhysicsSandbox />
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="framework-card rounded-2xl p-6">
+                                        <h3 className="text-lg font-bold mb-4 text-green-300">Real-time Simulation</h3>
+                                        <p className="text-sm text-indigo-100/90">
+                                            Three.js + cannon-es physics engine demonstrating harmonic principles in action. 
+                                            Objects naturally settle into stable, low-energy configurations.
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="framework-card rounded-2xl p-6">
+                                        <h3 className="text-lg font-bold mb-4 text-blue-300">LLM Integration</h3>
+                                        <p className="text-sm text-indigo-100/90">
+                                            Natural language planning with GPT-5 bridge, translating user intent into precise 
+                                            physics actions through the HTC framework's mathematical foundations.
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="framework-card rounded-2xl p-6">
+                                        <h3 className="text-lg font-bold mb-4 text-purple-300">Safety & Stability</h3>
+                                        <p className="text-sm text-indigo-100/90">
+                                            Built-in safety mechanisms prevent runaway energy states, demonstrating the 
+                                            framework's inherent stability and self-correcting properties.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'integration' && (
+                            <div className="space-y-8">
+                                <div className="framework-card rounded-2xl p-6">
+                                    <h2 className="text-2xl font-bold mb-6 gradient-text">HTC Framework Integration</h2>
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                        <div>
+                                            <h3 className="text-lg font-bold mb-4 text-purple-300">Theoretical → Practical</h3>
+                                            <p className="text-sm text-indigo-100/90 mb-4">
+                                                The HTC framework bridges the gap between abstract quantum field theory and 
+                                                practical computational applications. The physics sandbox demonstrates how 
+                                                harmonic principles manifest in real-time simulation.
+                                            </p>
+                                            <ul className="text-sm text-indigo-100/90 space-y-2">
+                                                <li>• Harmonic stability in object interactions</li>
+                                                <li>• Topological error resistance</li>
+                                                <li>• Self-correcting energy states</li>
+                                                <li>• Natural language → mathematical action</li>
+                                            </ul>
+                                        </div>
+                                        <div>
+                                            <h3 className="text-lg font-bold mb-4 text-cyan-300">Future Applications</h3>
+                                            <p className="text-sm text-indigo-100/90 mb-4">
+                                                This integration opens pathways to advanced AGI systems, quantum computing 
+                                                interfaces, and fundamentally new approaches to computational physics.
+                                            </p>
+                                            <ul className="text-sm text-indigo-100/90 space-y-2">
+                                                <li>• Quantum-gravitational computing</li>
+                                                <li>• Self-optimizing AI systems</li>
+                                                <li>• Universal computational interfaces</li>
+                                                <li>• Physics-aware machine learning</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <HTCFrameworkMap />
+                                    <PhysicsSandbox />
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="text-center py-8 text-indigo-200/60">
+                        <p>Harmonic-Topological Computation Framework • Bridging Theory and Practice</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        // Render the demo
+        ReactDOM.render(<HTCDemo />, document.getElementById('root'));
+    </script>
+</body>
+</html>

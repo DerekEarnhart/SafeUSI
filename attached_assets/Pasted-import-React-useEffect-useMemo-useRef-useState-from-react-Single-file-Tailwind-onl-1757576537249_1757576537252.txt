@@ -1,0 +1,474 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+// Single‑file, Tailwind‑only React app.
+// No external UI libs required; drop into Canvas or any React build.
+// v1.3 adds: Zero‑byte `application/octet-stream` ingest path, Processing Summary panel,
+// audit trail wiring, high‑level reasoning trace (safe, non‑CoT), and Number‑Pipe tools w/ chunking.
+
+// ------------------------- Utils -------------------------------------------
+function ts(ms: number) {
+  try {
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return String(ms);
+    return d.toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
+function bytesHuman(n: number) {
+  if (n === 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = Math.floor(Math.log(n) / Math.log(1024));
+  return `${(n / Math.pow(1024, i)).toFixed(2)} ${u[i]}`;
+}
+
+// Text -> hex -> BigInt (decimal string) and back (toy encoder; not compression)
+function textToBigIntString(s: string) {
+  const enc = new TextEncoder().encode(s);
+  let hex = "";
+  for (const b of enc) hex += b.toString(16).padStart(2, "0");
+  const big = BigInt("0x" + (hex || "00"));
+  return big.toString(10);
+}
+function bigIntStringToText(n: string) {
+  let big = BigInt(n || "0");
+  let hex = big.toString(16);
+  if (hex.length % 2) hex = "0" + hex;
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return new TextDecoder().decode(bytes);
+}
+function chunkString(s: string, size = 120) {
+  const out: string[] = []; for (let i = 0; i < s.length; i += size) out.push(s.slice(i, i + size)); return out;
+}
+function download(name: string, content: string, type = "application/json") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+// ------------------------- Seed Memory Vault -------------------------------
+const seedVault = {
+  audit_trail: [
+    {
+      timestamp: Date.now(),
+      action: "init",
+      details: {
+        fileName: "—",
+        fileSize: 0,
+        fileType: "meta",
+        ingestion: "Console initialized.",
+        compression: "N/A",
+        large_io_handling: "standard",
+        media_viewing: "N/A",
+        memory_integration: "Ledger bootstrapped.",
+      },
+    },
+  ],
+  memory_attributes: { degradation: "none", permanence: "harmonic_stable", fading: "none" },
+  large_io_capability: "harmonic_embedding_and_distributed_pipeline",
+};
+
+// ------------------------- App --------------------------------------------
+export default function App() {
+  const [activeTab, setActiveTab] = useState<"console" | "chat" | "settings">("console");
+  const [vault, setVault] = useState<any>(structuredClone(seedVault));
+  const [kb, setKb] = useState<string[]>(["Boot: Harmonic Unification primitives loaded."]); 
+  const [processingSummary, setProcessingSummary] = useState<any | null>(null);
+  const [vaultJson, setVaultJson] = useState<string>(JSON.stringify(seedVault, null, 2));
+  const [vaultOk, setVaultOk] = useState(true);
+
+  // Encoder/Decoder
+  const [encIn, setEncIn] = useState("");
+  const [encOut, setEncOut] = useState("");
+  const [chunked, setChunked] = useState<string[]>([]);
+  const [decIn, setDecIn] = useState("");
+  const [decOut, setDecOut] = useState("");
+
+  const addKB = (msg: string) => setKb((k) => [...k, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+
+  // ---- Core: zero‑byte ingest simulation ----
+  function simulateZeroByteEvent() {
+    const now = Date.now();
+    const sim = {
+      description: "File 'classname' (0 bytes, application/octet-stream) conceptually processed.",
+      processing_summary: {
+        fileName: "classname",
+        fileSize: 0,
+        fileType: "application/octet-stream",
+        ingestion: "Perception analyzed multi‑modal harmonic signature.",
+        compression: "Quantum‑Hybrid embedding applied (null payload represented canonically).",
+        large_io_handling: "File size is within standard processing parameters.",
+        media_viewing: "File type is not a visual media, no visual processing required.",
+        memory_integration: "Embedded into Persistent Harmonic Ledger (non‑degrading, non‑fading).",
+      },
+      reasoning_trace: [
+        "Perception → recognized metadata as an informational event",
+        "QH Processing → canonical null‑payload embedding; phase‑locked representation",
+        "Executive Oversight → no distributed pipeline needed; media modules bypassed",
+        "Memory Integration → append immutable ledger record; index by (name,type,time)",
+        "Response Synthesis → summarize event + surface audit hooks",
+      ],
+      timestamp: now,
+    };
+
+    // write to vault audit trail
+    const entry = {
+      timestamp: now,
+      action: "file_received_and_processed",
+      details: {
+        fileName: sim.processing_summary.fileName,
+        fileSize: sim.processing_summary.fileSize,
+        fileType: sim.processing_summary.fileType,
+        ingestion: sim.processing_summary.ingestion,
+        compression: sim.processing_summary.compression,
+        large_io_handling: sim.processing_summary.large_io_handling,
+        media_viewing: sim.processing_summary.media_viewing,
+        memory_integration: sim.processing_summary.memory_integration,
+      },
+    };
+    const next = structuredClone(vault);
+    next.audit_trail.unshift(entry);
+    setVault(next);
+    setVaultJson(JSON.stringify(next, null, 2));
+    setProcessingSummary(sim);
+    addKB("Simulated zero‑byte octet‑stream ingest recorded to ledger.");
+  }
+
+  async function ingestFile(f: File) {
+    const now = Date.now();
+    const type = f.type || "application/octet-stream";
+    const details = {
+      fileName: f.name,
+      fileSize: f.size,
+      fileType: type,
+      ingestion: "Perception analyzed metadata & signature.",
+      compression: f.size === 0 ? "Canonical null‑payload embedding" : "Harmonic embedding (toy).",
+      large_io_handling: f.size > 5_000_000 ? "Routed via distributed pipeline." : "Standard path.",
+      media_viewing: /^image\//.test(type) ? "Image‑type (viewer available)." : "Not visual media.",
+      memory_integration: "Embedded into Persistent Harmonic Ledger (simulated).",
+    };
+    const next = structuredClone(vault);
+    next.audit_trail.unshift({ timestamp: now, action: "file_received_and_processed", details });
+    setVault(next);
+    setVaultJson(JSON.stringify(next, null, 2));
+    setProcessingSummary({
+      description: `File '${f.name}' (${f.size} bytes, ${type}) processed`,
+      processing_summary: details,
+      reasoning_trace: [
+        "Perception → metadata ingest",
+        f.size === 0 ? "QH Processing → canonical null‑payload embedding" : "QH Processing → content embedding (toy)",
+        details.large_io_handling.includes("distributed") ? "Executive → scaled I/O path engaged" : "Executive → standard path",
+        "Memory → ledger append",
+      ],
+      timestamp: now,
+    });
+    addKB(`Ingested file: ${f.name} (${f.size} bytes).`);
+  }
+
+  // Vault ops
+  function exportVault() { download("memory_vault.json", JSON.stringify(vault, null, 2)); }
+  function importVaultFromJson() {
+    try { const parsed = JSON.parse(vaultJson); setVault(parsed); setVaultOk(true); addKB("Imported Memory Vault JSON."); }
+    catch { setVaultOk(false); }
+  }
+
+  // Encoder handlers
+  function handleEncode() {
+    const num = textToBigIntString(encIn);
+    setEncOut(num);
+    setChunked(chunkString(num));
+  }
+  function handleDecode() {
+    try { setDecOut(bigIntStringToText(decIn.replace(/\s+/g, ""))); }
+    catch { setDecOut("[decode error]"); }
+  }
+
+  // ------------------------- UI -------------------------------------------
+  return (
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 p-4 md:p-6">
+      {/* Topbar */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="h-6 w-6 rounded bg-cyan-400/20 ring-1 ring-cyan-400/40 grid place-items-center">⚙️</div>
+        <div className="text-xl font-semibold">Harmonic Sovereign Console</div>
+        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800/70 ml-2">zero‑byte ingest v1.3</span>
+        <div className="ml-auto flex gap-2 text-sm">
+          <button onClick={() => setActiveTab("console")} className={`px-3 py-1 rounded ${activeTab==="console"?"bg-cyan-500 text-black":"bg-slate-800"}`}>Console</button>
+          <button onClick={() => setActiveTab("chat")} className={`px-3 py-1 rounded ${activeTab==="chat"?"bg-cyan-500 text-black":"bg-slate-800"}`}>Chat</button>
+          <button onClick={() => setActiveTab("settings")} className={`px-3 py-1 rounded ${activeTab==="settings"?"bg-cyan-500 text-black":"bg-slate-800"}`}>Settings</button>
+        </div>
+      </div>
+
+      {activeTab === "console" && (
+        <div className="grid gap-4 xl:gap-6 grid-cols-1 xl:grid-cols-[1.15fr_0.85fr]">
+          {/* LEFT: Vault + Processing Summary + Encoder */}
+          <div className="space-y-4">
+            {/* Memory Vault */}
+            <div className="border border-slate-800/60 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2">
+                <span className="text-lg">Memory Vault</span>
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">harmonic_stable</span>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="text-xs text-slate-300">IO: {vault.large_io_capability}</div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-sm font-medium mb-1">State export / import</div>
+                    <div className="flex gap-2 flex-wrap">
+                      <button className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700" onClick={exportVault}>Export JSON</button>
+                      <button className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700" onClick={() => setVaultJson(JSON.stringify(vault, null, 2))}>Refresh JSON</button>
+                    </div>
+                    <textarea className={`mt-2 w-full font-mono text-xs min-h-[160px] rounded border ${vaultOk?"border-slate-800":"border-red-500"} bg-slate-950 p-2`} value={vaultJson} onChange={(e)=>setVaultJson(e.target.value)} />
+                    <div className="flex gap-2 mt-2">
+                      <button className="px-3 py-1.5 text-sm rounded bg-cyan-500 text-black" onClick={importVaultFromJson}>Apply JSON</button>
+                      {!vaultOk && <span className="text-xs text-red-400">JSON parse error</span>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium mb-1">Ingest</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label className="text-xs bg-slate-800 px-3 py-1.5 rounded cursor-pointer hover:bg-slate-700">
+                        <input type="file" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(f) ingestFile(f); }} />
+                        Upload file
+                      </label>
+                      <button className="text-xs bg-slate-800 px-3 py-1.5 rounded hover:bg-slate-700" onClick={simulateZeroByteEvent}>Simulate zero‑byte octet‑stream</button>
+                    </div>
+
+                    <div className="mt-3 text-xs text-slate-400">Audit Trail</div>
+                    <div className="mt-1 max-h-56 overflow-auto rounded border border-slate-800/60">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-900/60 text-slate-300 sticky top-0">
+                          <tr>
+                            <th className="text-left p-2 w-[32%]">When</th>
+                            <th className="text-left p-2 w-[26%]">Action</th>
+                            <th className="text-left p-2">Details</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vault.audit_trail.map((row: any, i: number)=> (
+                            <tr key={i} className="border-t border-slate-800/60">
+                              <td className="p-2 align-top">{ts(row.timestamp)}</td>
+                              <td className="p-2 align-top">{row.action}</td>
+                              <td className="p-2 align-top text-slate-300">
+                                <div className="flex flex-wrap gap-2 mb-1">
+                                  <span className="px-2 py-0.5 rounded bg-slate-800/70">{row.details.fileName}</span>
+                                  <span className="px-2 py-0.5 rounded bg-slate-800/70">{row.details.fileType}</span>
+                                  <span className="px-2 py-0.5 rounded bg-slate-800/70">{row.details.fileSize} bytes</span>
+                                </div>
+                                <div className="opacity-80">{row.details.memory_integration || row.details.note}</div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Processing Summary */}
+            <div className="border border-slate-800/60 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2">
+                <span className="text-lg">Processing Summary</span>
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">read‑only</span>
+              </div>
+              <div className="p-4 space-y-2 text-sm">
+                {!processingSummary && <div className="text-slate-400">No event yet — simulate or upload a file.</div>}
+                {processingSummary && (
+                  <>
+                    <div className="text-slate-300">{processingSummary.description}</div>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="bg-slate-900/40 rounded p-3 border border-slate-800/60">
+                        <div className="text-xs uppercase tracking-wide text-slate-400 mb-1">Summary</div>
+                        <div className="text-xs space-y-1">
+                          <div><b>Name:</b> {processingSummary.processing_summary.fileName}</div>
+                          <div><b>Type:</b> {processingSummary.processing_summary.fileType}</div>
+                          <div><b>Size:</b> {processingSummary.processing_summary.fileSize} ({bytesHuman(processingSummary.processing_summary.fileSize)})</div>
+                          <div><b>Ingestion:</b> {processingSummary.processing_summary.ingestion}</div>
+                          <div><b>Compression:</b> {processingSummary.processing_summary.compression}</div>
+                          <div><b>Large I/O:</b> {processingSummary.processing_summary.large_io_handling}</div>
+                          <div><b>Media:</b> {processingSummary.processing_summary.media_viewing}</div>
+                          <div><b>Memory:</b> {processingSummary.processing_summary.memory_integration}</div>
+                        </div>
+                      </div>
+                      <div className="bg-slate-900/40 rounded p-3 border border-slate-800/60">
+                        <div className="text-xs uppercase tracking-wide text-slate-400 mb-1">Reasoning (high‑level)</div>
+                        <ul className="list-disc list-inside text-xs space-y-1">
+                          {processingSummary.reasoning_trace.map((r: string, i: number)=> (<li key={i}>{r}</li>))}
+                        </ul>
+                        <div className="mt-2 text-[11px] text-slate-400">Note: This is a concise, high‑level trace for transparency, not an internal chain‑of‑thought.</div>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <button className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700" onClick={()=>download("processing_summary.json", JSON.stringify(processingSummary, null, 2))}>Download JSON</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Number‑Pipe Encoder (toy) */}
+            <div className="border border-slate-800/60 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2">
+                <span className="text-lg">Number‑Pipe Encoder</span>
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">text ⇄ BigInt (decimal)</span>
+              </div>
+              <div className="p-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs mb-1">Text → BigInt</div>
+                  <textarea className="w-full min-h-[120px] font-mono text-xs bg-slate-950 border border-slate-800 rounded p-2" value={encIn} onChange={(e)=>setEncIn(e.target.value)} placeholder="Type text…" />
+                  <div className="flex gap-2 mt-2">
+                    <button className="px-3 py-1.5 text-sm rounded bg-cyan-500 text-black" onClick={handleEncode}>Encode</button>
+                    <button className="px-3 py-1.5 text-sm rounded bg-slate-800" onClick={()=>{navigator.clipboard.writeText(encOut)}}>Copy number</button>
+                  </div>
+                  <textarea readOnly className="w-full mt-2 min-h-[90px] font-mono text-[11px] bg-slate-950 border border-slate-800 rounded p-2" value={encOut} placeholder="Encoded BigInt appears here" />
+                  {chunked.length>0 && (
+                    <div className="mt-2">
+                      <div className="text-xs text-slate-400 mb-1">Chunked (120 digits/line)</div>
+                      <textarea readOnly className="w-full min-h-[100px] font-mono text-[11px] bg-slate-950 border border-slate-800 rounded p-2" value={chunked.join("\n")} />
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-xs mb-1">BigInt → Text</div>
+                  <textarea className="w-full min-h-[120px] font-mono text-xs bg-slate-950 border border-slate-800 rounded p-2" value={decIn} onChange={(e)=>setDecIn(e.target.value)} placeholder="Paste BigInt (you can include whitespace/newlines)" />
+                  <div className="flex gap-2 mt-2">
+                    <button className="px-3 py-1.5 text-sm rounded bg-cyan-500 text-black" onClick={handleDecode}>Decode</button>
+                    <button className="px-3 py-1.5 text-sm rounded bg-slate-800" onClick={()=>setDecIn("")}>Clear</button>
+                  </div>
+                  <textarea readOnly className="w-full mt-2 min-h-[90px] font-mono text-[11px] bg-slate-950 border border-slate-800 rounded p-2" value={decOut} placeholder="Decoded text appears here" />
+                  <div className="mt-2 text-[11px] text-slate-400">Heads‑up: This is an encoding, not compression; token cost may increase vs raw text.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT: Knowledge stream + tiny chat sim */}
+          <div className="space-y-4">
+            {/* Knowledge Base Stream */}
+            <div className="border border-slate-800/60 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2">
+                <span className="text-lg">Knowledge Base Stream</span>
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">live</span>
+              </div>
+              <div className="p-3 max-h-64 overflow-auto text-xs space-y-1">
+                {kb.map((line, i) => (<div key={i} className="opacity-90">{line}</div>))}
+              </div>
+            </div>
+
+            {/* Minimal Chat & Playground (local sim) */}
+            <ChatPlayground addKB={addKB} />
+          </div>
+        </div>
+      )}
+
+      {activeTab === "chat" && (
+        <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+          <ChatPlayground addKB={addKB} />
+          <div className="border border-slate-800/60 rounded-xl p-3">
+            <div className="text-sm font-medium mb-2">Utilities</div>
+            <button className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700" onClick={()=>addKB("Quick ARC snapshot (sim)")}>Quick ARC Snapshot (sim)</button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "settings" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="border border-slate-800/60 rounded-xl p-4">
+            <div className="text-lg mb-2">Modes</div>
+            <div className="text-xs text-slate-400">This demo stores state locally in your browser. Export backups from the Vault.</div>
+          </div>
+          <div className="border border-slate-800/60 rounded-xl p-4">
+            <div className="text-lg mb-2">About</div>
+            <div className="text-xs text-slate-300">v1.3 adds the zero‑byte ingest path and safe reasoning trace. Integrate the <code>simulateZeroByteEvent()</code> and <code>ingestFile()</code> patterns in your larger architecture as your <em>file event driver</em>.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------------------------- Chat Playground --------------------------------
+function ChatPlayground({ addKB }: { addKB: (m: string)=>void }) {
+  const [messages, setMessages] = useState<any[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const [showTrace, setShowTrace] = useState<Record<string, boolean>>({});
+
+  useEffect(()=>{ endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  function toggle(id: string) { setShowTrace((s)=>({ ...s, [id]: !s[id] })); }
+
+  function synthReply(text: string) {
+    // Simple local reply demo with safe, high‑level rationale
+    const lower = text.toLowerCase();
+    if (/zero\s*byte|octet/.test(lower)) {
+      return {
+        reply: "Logged a zero‑byte event: canonical null‑payload embedding; see Processing Summary.",
+        trace: ["Intent detection", "Event typing: zero‑byte", "Embedding path: canonical null", "Ledger append", "Answer synthesis"],
+      };
+    }
+    if (/encode|bigint|number/.test(lower)) {
+      return {
+        reply: "Use Number‑Pipe: encode text → BigInt; optional 120‑digit chunking for transport. Reminder: not compression.",
+        trace: ["Intent detection", "Select Number‑Pipe tool", "Explain limits (token cost)", "Suggest chunking"],
+      };
+    }
+    return { reply: "Plan: formalize operators → simulate small example → log artifacts to Vault.", trace: ["Intent", "Operators", "Simulation", "Ledger", "Response"] };
+  }
+
+  function send() {
+    if (!input.trim()) return;
+    const user = { id: Date.now()+":u", who: "you", text: input.trim(), time: Date.now() };
+    setMessages((m)=>[...m, user]);
+    setInput("");
+    setLoading(true);
+    setTimeout(()=>{
+      const { reply, trace } = synthReply(user.text);
+      const model = { id: Date.now()+":m", who: "model", text: reply, time: Date.now(), trace };
+      setMessages((m)=>[...m, model]);
+      setLoading(false);
+      addKB("Chat reply emitted (local sim)");
+    }, 300 + Math.random()*500);
+  }
+
+  return (
+    <div className="border border-slate-800/60 rounded-xl p-3">
+      <div className="text-lg mb-2">Chat & Playground</div>
+      <div className="text-xs mb-2 opacity-80">Status: {loading ? "Working…" : "Idle"}</div>
+      <div className="space-y-2 max-h-[50vh] overflow-auto rounded border border-slate-800/60 p-2">
+        {messages.length === 0 && (<div className="text-xs opacity-70">Try: "simulate zero byte" or "encode this"</div>)}
+        {messages.map((m) => (
+          <div key={m.id} className="rounded bg-slate-900/50 p-2">
+            <div className="text-[11px] opacity-70">{m.who} · {new Date(m.time).toLocaleTimeString()}</div>
+            <div className="text-sm whitespace-pre-wrap">{m.text}</div>
+            {m.trace && (
+              <button className="mt-1 text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700" onClick={()=>toggle(m.id)}>{showTrace[m.id] ? "Hide rationale" : "Show rationale"}</button>
+            )}
+            {m.trace && showTrace[m.id] && (
+              <ul className="text-[11px] mt-1 opacity-85 list-disc list-inside">
+                {m.trace.map((t:string,i:number)=>(<li key={i}>{t}</li>))}
+              </ul>
+            )}
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+      <div className="mt-2 flex gap-2">
+        <textarea value={input} onChange={(e)=>setInput(e.target.value)} onKeyDown={(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }} className="flex-1 min-h-[60px] rounded bg-slate-950 border border-slate-800 p-2" placeholder="Ask the console…" />
+        <div className="grid gap-2 min-w-[140px]">
+          <button className="px-3 py-1.5 rounded bg-cyan-500 text-black" onClick={send}>Send</button>
+          <label className="text-xs inline-flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700">
+            <input type="file" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; addKB(`(chat) file received: ${f.name}`); }} />
+            Upload File
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}

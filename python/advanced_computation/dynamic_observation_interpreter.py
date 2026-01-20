@@ -1,0 +1,185 @@
+# This module defines the DynamicObservationInterpreter, a component that enables the WSM's
+# internal conceptual ecology and active exploration strategies to reciprocally influence
+# the selection and interpretation of raw empirical observations. This closes a dynamic
+# feedback loop, shaping the grounding metrics before they inform the multi-objective fitness function.
+import numpy as np
+from typing import Dict, Any
+
+class DynamicObservationInterpreter:
+    """
+    Interprets raw empirical observations based on the WSM's current internal
+    conceptual ecology and active exploration strategies. This class closes a
+    dynamic feedback loop, shaping the grounding metrics passed to the
+    ExternalRealityGrounder based on the WSM's current state and priorities.
+    """
+    def __init__(self,
+                 novelty_amplification_factor: float = 0.2, # How strongly discovery preference amplifies perceived novelty
+                 stability_emphasis_factor: float = 0.1,  # How strongly stability preference emphasizes observed similarity
+                 volatility_sensitivity_factor: float = 0.1): # How much exploration intensity modulates sensitivity to data stream volatility
+        """
+        Initializes the DynamicObservationInterpreter.
+        Args:
+            novelty_amplification_factor (float): How strongly discovery preference
+                                                  amplifies perceived novelty and downplays similarity.
+            stability_emphasis_factor (float): How strongly stability preference
+                                               emphasizes observed similarity and anchor relevance.
+            volatility_sensitivity_factor (float): How much exploration intensity
+                                                   modulates sensitivity to data stream volatility.
+        """
+        self.novelty_amplification_factor = novelty_amplification_factor
+        self.stability_emphasis_factor = stability_emphasis_factor
+        self.volatility_sensitivity_factor = volatility_sensitivity_factor
+
+    def interpret_observations(self,
+                               raw_observations: Dict[str, float],
+                               discovery_preference: float,
+                               stability_preference: float,
+                               exploration_intensity: float = 0.5 # A measure of how actively the WSM is exploring (0.0 to 1.0)
+                               ) -> Dict[str, float]:
+        """
+        Processes raw empirical observations, weighting and filtering them
+        based on the WSM's current internal state (discovery/stability preferences)
+        and exploration intensity.
+        Args:
+            raw_observations (Dict[str, float]): A dictionary of raw, unfiltered
+                                                 observations from the environment.
+                                                 Expected keys match ExternalRealityGrounder inputs:
+                                                 'data_stream_volatility', 'observed_similarity_to_models',
+                                                 'relevance_to_anchors', 'potential_novelty_in_stream',
+                                                 'successful_hypotheses_count', 'total_hypotheses_count',
+                                                 'average_hypothesis_predictive_accuracy',
+                                                 'conceptual_embedding_drift'.
+            discovery_preference (float): The current preference for 'surprising discovery'
+                                          (from HarmonicResonanceFitness).
+            stability_preference (float): The current preference for 'ecological stability'
+                                          (from HarmonicResonanceFitness).
+            exploration_intensity (float): A measure (0.0 to 1.0) of how actively the WSM
+                                           is currently exploring new conceptual space. Higher
+                                           values might come from high environmental uncertainty
+                                           or detected dissonance.
+        Returns:
+            Dict[str, float]: Interpreted observations, ready to be passed to the
+                               ExternalRealityGrounder. These values are adjusted
+                               to reflect the WSM's current "attentional bias."
+        """
+        interpreted_obs = raw_observations.copy()
+
+        # Influence on perceived novelty and similarity:
+        # High discovery preference amplifies perceived novelty and reduces perceived similarity.
+        # High stability preference amplifies perceived similarity and reduces perceived novelty.
+        # The 'novelty_bias_effect' is positive if discovery_preference > stability_preference,
+        # and negative otherwise, creating a dynamic weighting.
+        novelty_bias_effect = (discovery_preference - stability_preference) * self.novelty_amplification_factor
+
+        # Adjust perceived novelty based on bias
+        interpreted_obs['potential_novelty_in_stream'] = np.clip(
+            raw_observations.get('potential_novelty_in_stream', 0.0) * (1.0 + novelty_bias_effect),
+            0.0, 1.0
+        )
+
+        # Adjust perceived similarity based on bias (inverse of novelty effect)
+        interpreted_obs['observed_similarity_to_models'] = np.clip(
+            raw_observations.get('observed_similarity_to_models', 0.0) * (1.0 - novelty_bias_effect * self.stability_emphasis_factor), # Use stability_emphasis_factor here
+        0.0, 1.0
+        )
+        interpreted_obs['relevance_to_anchors'] = np.clip(
+            raw_observations.get('relevance_to_anchors', 0.0) * (1.0 - novelty_bias_effect * self.stability_emphasis_factor * 0.5), # Slightly less direct impact
+            0.0, 1.0
+        )
+
+        # Influence on data stream volatility:
+        # High exploration intensity makes the WSM more sensitive to volatility.
+        volatility_amplification = exploration_intensity * self.volatility_sensitivity_factor
+        interpreted_obs['data_stream_volatility'] = np.clip(
+            raw_observations.get('data_stream_volatility', 0.0) * (1.0 + volatility_amplification),
+            0.0, 1.0
+        )
+
+        # Other metrics like hypothesis counts and predictive accuracy are generally
+        # treated as more direct feedback, less subject to internal interpretive bias,
+        # and are passed through directly for this iteration.
+        interpreted_obs['successful_hypotheses_count'] = raw_observations.get('successful_hypotheses_count', 0)
+        interpreted_obs['total_hypotheses_count'] = raw_observations.get('total_hypotheses_count', 0)
+        interpreted_obs['average_hypothesis_predictive_accuracy'] = raw_observations.get('average_hypothesis_predictive_accuracy', 0.0)
+        interpreted_obs['conceptual_embedding_drift'] = raw_observations.get('conceptual_embedding_drift', 0.0)
+
+        return interpreted_obs
+
+if __name__ == "__main__":
+    print("--- Demonstrating DynamicObservationInterpreter ---")
+
+    interpreter = DynamicObservationInterpreter(
+        novelty_amplification_factor=0.3,
+        stability_emphasis_factor=0.2,
+        volatility_sensitivity_factor=0.2
+    )
+
+    # Simulate raw observations
+    raw_obs_base = {
+        'data_stream_volatility': 0.5,
+        'observed_similarity_to_models': 0.6,
+        'relevance_to_anchors': 0.7,
+        'potential_novelty_in_stream': 0.4,
+        'successful_hypotheses_count': 5,
+        'total_hypotheses_count': 10,
+        'average_hypothesis_predictive_accuracy': 0.75,
+        'conceptual_embedding_drift': 0.15,
+    }
+
+    # Scenario 1: High discovery preference, moderate exploration
+    print("\nScenario 1: High Discovery Preference (0.8), Moderate Exploration (0.6)")
+    interpreted_s1 = interpreter.interpret_observations(
+        raw_obs_base,
+        discovery_preference=0.8,
+        stability_preference=0.2,
+        exploration_intensity=0.6
+    )
+    print("Raw Observations:")
+    for k, v in raw_obs_base.items(): print(f"  {k}: {v:.2f}")
+    print("\nInterpreted Observations (High Discovery Bias):")
+    for k, v in interpreted_s1.items(): print(f"  {k}: {v:.2f}")
+    
+    # Expected: potential_novelty_in_stream increases, similarity/relevance decreases, volatility increases.
+    assert interpreted_s1['potential_novelty_in_stream'] > raw_obs_base['potential_novelty_in_stream']
+    assert interpreted_s1['observed_similarity_to_models'] < raw_obs_base['observed_similarity_to_models']
+    assert interpreted_s1['data_stream_volatility'] > raw_obs_base['data_stream_volatility']
+
+    # Scenario 2: High stability preference, low exploration
+    print("\nScenario 2: High Stability Preference (0.7), Low Exploration (0.2)")
+    interpreted_s2 = interpreter.interpret_observations(
+        raw_obs_base,
+        discovery_preference=0.3,
+        stability_preference=0.7,
+        exploration_intensity=0.2
+    )
+    print("Raw Observations:")
+    for k, v in raw_obs_base.items(): print(f"  {k}: {v:.2f}")
+    print("\nInterpreted Observations (High Stability Bias):")
+    for k, v in interpreted_s2.items(): print(f"  {k}: {v:.2f}")
+    
+    # Expected: potential_novelty_in_stream decreases, similarity/relevance increases, volatility decreases.
+    assert interpreted_s2['potential_novelty_in_stream'] < raw_obs_base['potential_novelty_in_stream']
+    assert interpreted_s2['observed_similarity_to_models'] > raw_obs_base['observed_similarity_to_models']
+    assert interpreted_s2['data_stream_volatility'] < raw_obs_base['data_stream_volatility']
+
+    # Scenario 3: Equal preferences, moderate exploration
+    print("\nScenario 3: Equal Preferences (0.5), Moderate Exploration (0.5)")
+    interpreted_s3 = interpreter.interpret_observations(
+        raw_obs_base,
+        discovery_preference=0.5,
+        stability_preference=0.5,
+        exploration_intensity=0.5
+    )
+    print("Raw Observations:")
+    for k, v in raw_obs_base.items(): print(f"  {k}: {v:.2f}")
+    print("\nInterpreted Observations (Neutral Bias):")
+    for k, v in interpreted_s3.items(): print(f"  {k}: {v:.2f}")
+    
+    # Expected: novelty_bias_effect = 0. Volatility slightly increased due to exploration_intensity.
+    assert np.isclose(interpreted_s3['potential_novelty_in_stream'], raw_obs_base['potential_novelty_in_stream'])
+    assert np.isclose(interpreted_s3['observed_similarity_to_models'], raw_obs_base['observed_similarity_to_models'])
+    assert interpreted_s3['data_stream_volatility'] > raw_obs_base['data_stream_volatility']
+
+    print("\n🎯 DynamicObservationInterpreter validation successful!")
+    print("✅ All attentional bias effects working as expected")
+    print("🧠 WSM adaptive perception system ready for integration")

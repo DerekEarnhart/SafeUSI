@@ -1,0 +1,10 @@
+This is a test document for the simple RAG system.
+
+The document contains information about AI and machine learning:
+
+- Artificial Intelligence is the simulation of human intelligence processes by machines
+- Machine Learning is a subset of AI that enables computers to learn without being explicitly programmed
+- Natural Language Processing helps computers understand and process human language
+- Deep Learning uses neural networks with multiple layers to analyze data
+
+This system should be able to ]extract this text and answer questions about AI, machine learning, and related topics based on the content of this uploaded file.

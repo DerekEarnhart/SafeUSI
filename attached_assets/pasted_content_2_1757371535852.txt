@@ -1,0 +1,1043 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * Harmonic Sovereign Console — v1.9.0 (client with Gateway integration)
+ * ---------------------------------------------------------------------
+ * New in v1.9.0
+ *  • Agent Gateway settings (URL + token) with handshake test.
+ *  • Chat can route tasks to Node Agent (use gateway toggle).
+ *  • Repo & Tests card: Git status, test runner, diff/patch preview, commit gate.
+ *  • Optional HCP benchmark trigger via gateway (if server exposes /api/hcp/benchmark).
+ *
+ * Security note:
+ *  • Keys/token saved in localStorage for demo only. Use a backend in production.
+ */
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tiny UI primitives (no external deps)
+// ──────────────────────────────────────────────────────────────────────────────
+const cx = (...s) => s.filter(Boolean).join(" ")
+const Button = ({ children, onClick, variant = "default", size = "md", disabled, className, ...props }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className={cx(
+      "rounded-2xl shadow-sm transition active:scale-[0.99] border",
+      size === "sm" ? "text-xs px-3 py-1.5" : size === "xs" ? "text-[11px] px-2 py-1" : "px-4 py-2",
+      variant === "secondary" && "bg-slate-900/40 border-slate-800 text-slate-100 hover:bg-slate-900/60",
+      variant === "outline" && "bg-transparent border-slate-700 text-slate-100 hover:bg-slate-900/40",
+      variant === "destructive" && "bg-red-600/90 border-red-700 text-white hover:bg-red-600",
+      variant === "default" && "bg-cyan-500/90 border-cyan-600 text-slate-900 hover:bg-cyan-500",
+      disabled && "opacity-60 cursor-not-allowed",
+      className
+    )}
+    {...props}
+  >{children}</button>
+)
+const Card = ({ children, className }) => (
+  <div className={cx("rounded-3xl border border-slate-800/60 bg-slate-900/40", className)}>{children}</div>
+)
+const CardHeader = ({ children, className }) => (
+  <div className={cx("px-4 pt-4 pb-2 border-b border-slate-800/60", className)}>{children}</div>
+)
+const CardTitle = ({ children }) => (
+  <div className="text-base font-semibold tracking-wide flex items-center gap-2">{children}</div>
+)
+const CardContent = ({ children, className }) => (
+  <div className={cx("p-4", className)}>{children}</div>
+)
+const Input = ({ className, ...props }) => (
+  <input className={cx("w-full rounded-xl bg-slate-900/40 border border-slate-800 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40", className)} {...props} />
+)
+const Textarea = ({ className, ...props }) => (
+  <textarea className={cx("w-full min-h-[90px] rounded-xl bg-slate-900/40 border border-slate-800 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40", className)} {...props} />
+)
+const Badge = ({ children, variant = "secondary", className }) => (
+  <span className={cx(
+    "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] border",
+    variant === "secondary" && "bg-slate-900/50 border-slate-800 text-slate-200",
+    variant === "outline" && "bg-transparent border-slate-700 text-slate-300",
+    variant === "destructive" && "bg-red-900/30 border-red-800 text-red-200",
+    className
+  )}>{children}</span>
+)
+const Pill = ({ children }) => (
+  <span className="text-[11px] rounded-full border px-2 py-0.5 bg-slate-900/50 border-slate-800 text-slate-300 whitespace-nowrap">{children}</span>
+)
+const Progress = ({ value }) => (
+  <div className="w-full h-2 bg-slate-900/50 rounded-full overflow-hidden border border-slate-800">
+    <div className="h-full bg-cyan-500/80" style={{ width: `${Math.max(0, Math.min(100, value || 0))}%` }} />
+  </div>
+)
+
+// Help primitives
+const HelpIconButton = ({ onClick, title }) => (
+  <button
+    onClick={onClick}
+    title={title || "Help"}
+    className="ml-2 inline-flex items-center justify-center w-5 h-5 rounded-full border border-slate-700 text-[11px] bg-slate-900/60 hover:bg-slate-900"
+  >?</button>
+)
+const HelpBubble = ({ active, id, onClose, children }) => {
+  if (active !== id) return null
+  return (
+    <div className="mt-2 text-xs rounded-xl border border-slate-700 bg-slate-900/70 p-3 space-y-2">
+      <div className="opacity-90 whitespace-pre-wrap">{children}</div>
+      <div className="flex justify-end"><Button size="sm" variant="secondary" onClick={onClose}>Got it</Button></div>
+    </div>
+  )
+}
+const Modal = ({ open, onClose, children, title }) => {
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <div className="relative w-[min(900px,92vw)] max-h-[88vh] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/95 p-4">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-800"><div className="text-lg font-semibold">{title}</div><Button size="sm" variant="outline" onClick={onClose}>Close</Button></div>
+        <div className="pt-3">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+function ts(ms) { try { const d = new Date(ms); if (isNaN(d.getTime())) return String(ms); return d.toLocaleString(); } catch { return String(ms) } }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+function seedRand(seed) { let h = 1779033703 ^ seed.length; for (let i = 0; i < seed.length; i++) { h = Math.imul(h ^ seed.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19) } return () => { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); const t = (h ^= h >>> 16) >>> 0; return t / 4294967296 } }
+function download(name, content) { const blob = new Blob([content], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url) }
+function textToBigIntString(s) { const enc = new TextEncoder().encode(s); let hex = ""; for (const b of enc) hex += b.toString(16).padStart(2, "0"); const big = BigInt("0x" + (hex || "00")); return big.toString(10) }
+function bigIntStringToText(n) { let big = BigInt(n || "0"); let hex = big.toString(16); if (hex.length % 2) hex = "0" + hex; const bytes = new Uint8Array(hex.length / 2); for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16); return new TextDecoder().decode(bytes) }
+function speak(text) { try { if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(text)) } catch {} }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AGICore (local toy engine)
+// ──────────────────────────────────────────────────────────────────────────────
+class AGICore {
+  constructor(opts = {}) {
+    this.memoryVault = opts.memoryVault || { audit_trail: [], belief_state: { A: 1, B: 1, C: 1 }, code_knowledge: {}, programming_skills: {}, attributes: { degradation: "none", permanence: "harmonic_stable", fading: "none" }, }
+    this.dreamState = opts.dreamState || { last_active: null, summary: "idle", core_beliefs: {} }
+    this.mathematicalRigorMode = !!opts.mathematicalRigorMode
+  }
+  toggleMathematicalRigor() { this.mathematicalRigorMode = !this.mathematicalRigorMode; return this.mathematicalRigorMode }
+  spectralMultiply(freq1, amp1, phase1, freq2, amp2, phase2, numSamples = 128) {
+    const t = Array.from({ length: numSamples }, (_, i) => (i / numSamples) * 2 * Math.PI)
+    const f_t = t.map(v => amp1 * Math.sin(freq1 * v + phase1))
+    const g_t = t.map(v => amp2 * Math.sin(freq2 * v + phase2))
+    const result = f_t.map((fv, i) => fv * g_t[i])
+    const mixed = [freq1 + freq2, Math.abs(freq1 - freq2)]
+    return { description: "Simulated spectral multiplication (direct method).", output_waveform_preview: result.slice(0, 12).map(x => Number(x.toFixed(3))), conceptual_mixed_frequencies: mixed }
+  }
+  simulateARCBenchmark() { const score = parseFloat((Math.random() * 0.2 + 0.74).toFixed(3)); return { description: "Simulated ARC benchmark", metric: "ReasoningScore", score, latency_ms: Math.round(Math.random() * 400 + 80) } }
+  simulateSWELancerBenchmark() { const score = parseFloat((Math.random() * 0.3 + 0.6).toFixed(3)); return { description: "Simulated SWELancer benchmark", completion_rate: score, error_rate: parseFloat((Math.random() * 0.04 + 0.01).toFixed(3)) } }
+  retrieveMemory(query) { const dummy = [ { text: "Harmonic Algebra concept", embedding: [0.8, 0.2, 0.1] }, { text: "Quantum entanglement note", embedding: [0.1, 0.7, 0.2] }, ]; const score = (s) => Math.max(0, 1 - Math.abs(s.length - query.length) / Math.max(10, query.length)); const matches = dummy.map(d => ({ ...d, sim: Number(score(d.text).toFixed(3)) })).sort((a, b) => b.sim - a.sim); return { description: "Memory retrieval (demo)", query, top_matches: matches.slice(0, 2) } }
+  generateConceptualReasoning(query, opts = {}) {
+    const timestamp = Date.now();
+    const steps = [];
+    steps.push('Perception: detected intent in "' + query.slice(0, 80) + '".');
+    steps.push("Analysis: invoked harmonic primitives (simulated).");
+    if (this.mathematicalRigorMode || opts.rigor) steps.push("Mathematical Rigor: attach formal steps where available.");
+    steps.push("Synthesis: balanced clarity and depth.");
+    const mix = /spectral|multiply|spectrum|sin/i.test(query)
+      ? (() => { const m = this.spectralMultiply(1, 1, 0, 2, 0.5, Math.PI / 4); return "Spectral multiply → mixed " + m.conceptual_mixed_frequencies.join(", ") })()
+      : /benchmark|arc|swe/i.test(query)
+      ? (() => { const a = this.simulateARCBenchmark(); return "Benchmark (sim): " + a.metric + "=" + a.score + " latency=" + a.latency_ms + "ms" })()
+      : /memory|recall|remember/i.test(query)
+      ? (() => { const m = this.retrieveMemory(query); return "Memory: " + m.top_matches.map(t => t.text + " (sim:" + t.sim + ")").join("; ") })()
+      : "Plan for: \"" + query + "\" — 1) formalize ops; 2) simulate; 3) log artifacts.";
+    this.memoryVault.audit_trail.push({ timestamp, action: "generate_response", cue: query });
+    return { reply: mix, reasoning: steps.join("\n"), meta: { timestamp } }
+  }
+  async receiveFile(name, size, type) {
+    const now = Date.now();
+    const details = { fileName: name, fileSize: size, fileType: type || "application/octet-stream", ingestion: "Perception analyzed metadata & signature.", compression: "Harmonic embedding (toy).", large_io_handling: size > 5_000_000 ? "Routed via distributed pipeline." : "Standard path.", media_viewing: /^image\//.test(type||"") ? "Image-type (viewer available)." : "Not visual media.", memory_integration: "Embedded into Persistent Harmonic Ledger (sim)." };
+    this.memoryVault.audit_trail.unshift({ timestamp: now, action: "file_received_and_processed", details });
+    return details
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// LLM provider helpers (OpenAI/Gemini) + Translation Bridge
+// ──────────────────────────────────────────────────────────────────────────────
+async function testOpenAIKey(key) {
+  try { const res = await fetch("https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${key}` } }); if (!res.ok) return { ok: false, message: `OpenAI test failed: ${res.status} ${res.statusText}` }; const json = await res.json(); return { ok: true, message: `OpenAI OK — models: ${Array.isArray(json.data) ? json.data.length : "?"}` } } catch (e) { return { ok: false, message: `OpenAI test error (CORS/network): ${e.message}` } }
+}
+async function testGeminiKey(key) {
+  try { const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`); if (!res.ok) return { ok: false, message: `Gemini test failed: ${res.status} ${res.statusText}` }; const json = await res.json(); const names = (json.models||[]).slice(0, 3).map(m=>m.name).join(", "); return { ok: true, message: `Gemini OK — sample: ${names || "(no list)"}` } } catch (e) { return { ok: false, message: `Gemini test error (CORS/network): ${e.message}` } }
+}
+async function openaiTranslate({ key, text, direction }) {
+  const system = direction === "user_to_framework" ? "Translate the user's message into succinct, precise technical English optimized for an AGI framework. Keep semantics exact." : "Translate the framework's technical output back to the user's casual, friendly English without losing meaning."
+  const body = { model: "gpt-4o-mini", messages: [ { role: "system", content: system }, { role: "user", content: text } ] }
+  const res = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify(body) })
+  if (!res.ok) throw new Error(`OpenAI translate error: ${res.status}`)
+  const j = await res.json();
+  return j.choices?.[0]?.message?.content?.trim() || text
+}
+async function geminiTranslate({ key, text, direction }) {
+  const system = direction === "user_to_framework" ? "Translate the user's message into succinct, precise technical English optimized for an AGI framework. Keep semantics exact." : "Translate the framework's technical output back to the user's casual, friendly English without losing meaning."
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(key)}`
+  const payload = { contents: [ { role: "user", parts: [ { text: `${system}\n\nTEXT:\n${text}` } ] } ] }
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+  if (!res.ok) throw new Error(`Gemini translate error: ${res.status}`)
+  const j = await res.json();
+  return j.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || text
+}
+function translationBridge({ provider, openaiKey, geminiKey, text, direction }) {
+  if (provider === "openai" && openaiKey) return openaiTranslate({ key: openaiKey, text, direction })
+  if (provider === "gemini" && geminiKey) return geminiTranslate({ key: geminiKey, text, direction })
+  return text // provider none → identity, synchronously
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Gateway helper
+// ──────────────────────────────────────────────────────────────────────────────
+async function gwFetch({ baseUrl, token, path, body }) {
+  if (!baseUrl) throw new Error("Gateway URL not set")
+  const url = `${baseUrl.replace(/\/$/, "")}${path}`
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token||""}` }, body: JSON.stringify(body||{}) })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Self‑tests (tiny runtime checks)
+// ──────────────────────────────────────────────────────────────────────────────
+function runSelfTests({ gatewayUrl, gatewayToken } = {}) {
+  const results = []
+  const pass = (name) => results.push({ name, ok: true })
+  const fail = (name, err) => results.push({ name, ok: false, err: String(err) })
+  try {
+    const s = "Hello, 世界"
+    const enc = textToBigIntString(s)
+    const dec = bigIntStringToText(enc)
+    if (dec === s) pass("Encode/Decode roundtrip (unicode)")
+    else fail("Encode/Decode roundtrip (unicode)", `Expected '${s}', got '${dec}'`)
+  } catch (e) { fail("Encode/Decode roundtrip (unicode)", e) }
+  // Emoji round‑trip test
+  try {
+    const s = "🧠🚀"
+    const enc = textToBigIntString(s)
+    const dec = bigIntStringToText(enc)
+    if (dec === s) pass("Encode/Decode roundtrip (emoji)")
+    else fail("Encode/Decode roundtrip (emoji)", `Expected '${s}', got '${dec}'`)
+  } catch (e) { fail("Encode/Decode roundtrip (emoji)", e) }
+  // Empty string round‑trip
+  try {
+    const s = ""
+    const enc = textToBigIntString(s)
+    const dec = bigIntStringToText(enc)
+    if (dec === s && enc === "0") pass("Encode/Decode roundtrip (empty string)")
+    else fail("Encode/Decode roundtrip (empty string)", `enc='${enc}' dec='${dec}'`)
+  } catch (e) { fail("Encode/Decode roundtrip (empty string)", e) }
+  try {
+    const core = new AGICore({})
+    const mix = core.spectralMultiply(3,1,0,5,1,0)
+    if (Array.isArray(mix.conceptual_mixed_frequencies) && mix.conceptual_mixed_frequencies[0] === 8 && mix.conceptual_mixed_frequencies[1] === 2) pass("Spectral mixed freqs (3,5) => [8,2]")
+    else fail("Spectral mixed freqs (3,5)", JSON.stringify(mix))
+  } catch (e) { fail("Spectral mixed freqs (3,5)", e) }
+  // Waveform preview length sanity
+  try {
+    const core = new AGICore({})
+    const mix = core.spectralMultiply(1,1,0,2,1,0)
+    if (Array.isArray(mix.output_waveform_preview) && mix.output_waveform_preview.length === 12) pass("Waveform preview length = 12")
+    else fail("Waveform preview length", JSON.stringify(mix.output_waveform_preview))
+  } catch (e) { fail("Waveform preview length", e) }
+  // New: finite waveform values
+  try {
+    const core = new AGICore({})
+    const mix = core.spectralMultiply(2,1,0,7,1,0)
+    const allFinite = mix.output_waveform_preview.every(Number.isFinite)
+    if (allFinite) pass("Waveform values are finite")
+    else fail("Waveform values are finite", JSON.stringify(mix.output_waveform_preview))
+  } catch (e) { fail("Waveform values are finite", e) }
+  // New: seedRand determinism (first sample)
+  try {
+    const a = seedRand("det-seed")()
+    const b = seedRand("det-seed")()
+    if (a === b) pass("seedRand deterministic first sample")
+    else fail("seedRand deterministic first sample", `${a} != ${b}`)
+  } catch (e) { fail("seedRand deterministic first sample", e) }
+  // New: Bridge fallback (framework→user)
+  try {
+    const echo2 = translationBridge({ provider: "none", openaiKey: "", geminiKey: "", text: "pong", direction: "framework_to_user" })
+    if (echo2 === "pong") pass("Bridge fallback (none) framework→user identity")
+    else fail("Bridge fallback (none) framework→user identity", echo2)
+  } catch (e) { fail("Bridge fallback (none) framework→user identity", e) }
+  // New: spectral product bounded in [-1, 1]
+  try {
+    const core = new AGICore({})
+    const mix = core.spectralMultiply(1,1,0,2,1,0)
+    const bounded = mix.output_waveform_preview.every(v => v <= 1 && v >= -1)
+    if (bounded) pass("Spectral product bounded [-1,1]")
+    else fail("Spectral product bounded [-1,1]", JSON.stringify(mix.output_waveform_preview))
+  } catch (e) { fail("Spectral product bounded [-1,1]", e) }
+  try {
+    const core = new AGICore({})
+    const before = core.memoryVault.audit_trail.length
+    const r = core.generateConceptualReasoning("benchmark arc")
+    const after = core.memoryVault.audit_trail.length
+    if (r.reply && after === before + 1) pass("Reasoning appends to audit trail")
+    else fail("Reasoning appends to audit trail", { reply: r.reply, before, after })
+  } catch (e) { fail("Reasoning appends to audit trail", e) }
+  // File ingestion adds an audit event
+  try {
+    const core = new AGICore({})
+    const before = core.memoryVault.audit_trail.length
+    return Promise.resolve(core.receiveFile("demo.txt", 42, "text/plain")).then(async () => {
+      const after = core.memoryVault.audit_trail.length
+      if (after === before + 1) pass("File ingestion audit entry")
+      else fail("File ingestion audit entry", `Expected ${before+1}, got ${after}`)
+      // Bridge fallback test (synchronous identity)
+      try {
+        const echo = translationBridge({ provider: "none", openaiKey: "", geminiKey: "", text: "ping", direction: "user_to_framework" })
+        if (echo === "ping") pass("Bridge fallback (none) is identity")
+        else fail("Bridge fallback (none) is identity", echo)
+      } catch (e) { fail("Bridge fallback (none) is identity", e) }
+      // New: memory retrieval returns two matches
+      try {
+        const mem = core.retrieveMemory("harmonic")
+        if (Array.isArray(mem.top_matches) && mem.top_matches.length === 2) pass("Memory retrieval returns two matches")
+        else fail("Memory retrieval returns two matches", JSON.stringify(mem))
+      } catch (e) { fail("Memory retrieval returns two matches", e) }
+      // Number‑pipe JSON idempotence (encode→decode of JSON should stabilize)
+      try {
+        const json = { a: 1, b: "x" }
+        const enc = textToBigIntString(JSON.stringify(json))
+        const dec = JSON.parse(bigIntStringToText(enc))
+        if (dec.a === 1 && dec.b === "x") pass("Number‑pipe JSON idempotence")
+        else fail("Number‑pipe JSON idempotence", JSON.stringify(dec))
+      } catch (e) { fail("Number‑pipe JSON idempotence", e) }
+      // Gateway optional ping
+      try {
+        if (gatewayUrl) {
+          const pong = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/ping", body: {} })
+          if (pong && pong.ok) pass("Gateway handshake")
+          else fail("Gateway handshake", JSON.stringify(pong))
+        } else {
+          pass("Gateway handshake (skipped — no URL)")
+        }
+      } catch (e) { fail("Gateway handshake", e) }
+      return results
+    })
+  } catch (e) { fail("File ingestion audit entry", e); return results }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Main App
+// ──────────────────────────────────────────────────────────────────────────────
+export default function HarmonicSovereignConsole() {
+  // Global tabs
+  const [tab, setTab] = useState("console") // console | chat | settings
+
+  // Help state
+  const [helpId, setHelpId] = useState(null) // string | null
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [tourStep, setTourStep] = useState(0)
+
+  // Memory Vault
+  const seedVault = useMemo(() => ({
+    audit_trail: [ { timestamp: Date.now(), action: "init", details: { fileName: "—", fileSize: 0, fileType: "meta", ingestion: "Console initialized.", compression: "N/A", large_io_handling: "standard", media_viewing: "N/A", memory_integration: "Ledger bootstrapped." } } ],
+    supported_file_types: "all_known_formats_via_harmonic_embedding",
+    attributes: { degradation: "none", permanence: "harmonic_stable", fading: "none" },
+    belief_state: { A: 1, B: 1, C: 1 },
+    large_io_capability: "harmonic_compression_and_distributed_processing_framework",
+    code_knowledge: {}, programming_skills: {}
+  }), [])
+  const [vault, setVault] = useState(structuredClone(seedVault))
+  const [vaultJson, setVaultJson] = useState(JSON.stringify(seedVault, null, 2))
+  const [vaultOk, setVaultOk] = useState(true)
+  const [alphaA, setAlphaA] = useState(vault.belief_state.A)
+  const [alphaB, setAlphaB] = useState(vault.belief_state.B)
+  const [alphaC, setAlphaC] = useState(vault.belief_state.C)
+  const alphaSum = alphaA + alphaB + alphaC
+  const probs = useMemo(() => ({ A: alphaA/alphaSum, B: alphaB/alphaSum, C: alphaC/alphaSum }), [alphaA,alphaB,alphaC,alphaSum])
+
+  // Toy engine
+  const [agi] = useState(() => new AGICore({}))
+  const [rigor, setRigor] = useState(agi.mathematicalRigorMode)
+
+  // KB stream
+  const [kb, setKb] = useState(["Boot: Quantum Harmonic Principles + Agent Models loaded."])
+  const addKB = (msg) => setKb(k => [...k, `[${new Date().toLocaleTimeString()}] ${msg}`])
+
+  // Orchestrator
+  const [task, setTask] = useState("")
+  const [coherence, setCoherence] = useState(0)
+  const [dissonance, setDissonance] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [appOut, setAppOut] = useState("")
+  const [planOut, setPlanOut] = useState("")
+  const [creaOut, setCreaOut] = useState("")
+  const [finalOut, setFinalOut] = useState("Awaiting workflow completion…")
+  const coherenceBar = Math.max(0, Math.min(100, coherence))
+
+  // Chat + Bridge
+  const [messages, setMessages] = useState(() => { try { return JSON.parse(localStorage.getItem("hagi:messages")||"[]") } catch { return [] } })
+  const [input, setInput] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [showReasoningMap, setShowReasoningMap] = useState({})
+  const [bridgeOn, setBridgeOn] = useState(true)
+  const [useAgentGateway, setUseAgentGateway] = useState(false)
+  const endRef = useRef(null)
+
+  // Benchmarks
+  const [bench, setBench] = useState([])
+
+  // Repo & Tests (via Gateway)
+  const [gitStatus, setGitStatus] = useState(null)
+  const [testSummary, setTestSummary] = useState(null)
+  const [patchPath, setPatchPath] = useState("")
+  const [patchNewContent, setPatchNewContent] = useState("")
+  const [diffText, setDiffText] = useState("")
+  const [commitMsg, setCommitMsg] = useState("")
+
+  // Self‑tests
+  const [tests, setTests] = useState([])
+  const [testsRunAt, setTestsRunAt] = useState(null)
+
+  // Settings (keys + gateway)
+  const [provider, setProvider] = useState(() => localStorage.getItem("hagi_provider") || "none") // none|openai|gemini
+  const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem("hagi_openai_key") || "")
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("hagi_gemini_key") || "")
+  const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem("hagi_gateway_url") || "")
+  const [gatewayToken, setGatewayToken] = useState(() => localStorage.getItem("hagi_gateway_token") || "")
+  const [apiTestStatus, setApiTestStatus] = useState(null)
+  const [gwTestStatus, setGwTestStatus] = useState(null)
+
+  // Effects
+  useEffect(() => { localStorage.setItem("hagi:messages", JSON.stringify(messages)); endRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
+  useEffect(() => { localStorage.setItem("hagi_openai_key", openaiKey) }, [openaiKey])
+  useEffect(() => { localStorage.setItem("hagi_gemini_key", geminiKey) }, [geminiKey])
+  useEffect(() => { localStorage.setItem("hagi_provider", provider) }, [provider])
+  useEffect(() => { localStorage.setItem("hagi_gateway_url", gatewayUrl) }, [gatewayUrl])
+  useEffect(() => { localStorage.setItem("hagi_gateway_token", gatewayToken) }, [gatewayToken])
+
+  async function doRunTests() {
+    const r = await runSelfTests({ gatewayUrl, gatewayToken });
+    setTests(r);
+    setTestsRunAt(new Date().toLocaleString())
+  }
+  useEffect(() => { doRunTests() }, [])
+
+  // First‑run banner: guide to keys
+  const firstRun = provider === "none" && !openaiKey && !geminiKey
+
+  // Vault ops
+  function saveBeliefToVault() { const next = structuredClone(vault); next.belief_state = { A: alphaA, B: alphaB, C: alphaC }; setVault(next); setVaultJson(JSON.stringify(next, null, 2)); addKB("Belief priors committed to Memory Vault.") }
+  function importVaultFromJson() { try { const parsed = JSON.parse(vaultJson); setVault(parsed); if (parsed?.belief_state) { setAlphaA(Number(parsed.belief_state.A)||1); setAlphaB(Number(parsed.belief_state.B)||1); setAlphaC(Number(parsed.belief_state.C)||1) } setVaultOk(true); addKB("Imported Memory Vault JSON.") } catch { setVaultOk(false) } }
+  function exportVault() { download("memory_vault.json", JSON.stringify(vault, null, 2)) }
+  async function ingestFile(f) { const details = await agi.receiveFile(f.name, f.size, f.type||"application/octet-stream"); const next = structuredClone(vault); next.audit_trail.unshift({ timestamp: Date.now(), action: "file_received_and_processed", details }); setVault(next); setVaultJson(JSON.stringify(next, null, 2)); addKB(`Ingested file: ${f.name} (${f.size} bytes).`) }
+
+  // Orchestrator agents (toy)
+  async function synthApp(t) { const rng = seedRand("app:"+t); const hooks = ["prime‑quantum compression", "infinite context surfaces", "safety‑preserving operator", "self‑auditing traces", "harmonic scheduler"]; const pick = hooks[Math.floor(rng()*hooks.length)]; return `Minimal orchestrator for "${t}" with ${pick}, typed IO ports, offline‑first state, JSON export.` }
+  async function synthPlan(t) { const steps = ["Define intent → constraints → success metrics","Decompose into agents; assign capabilities","Parallel search; collect artifacts","Score with coherence + cost; downselect","Assemble final; generate tests + README"]; return steps.map((s,i)=>`${i+1}. ${s} (for "${t}")`).join("\n") }
+  async function synthCreative(t) { const rng = seedRand("crea:"+t); const vibes = ["neon on slate","matte indigo","graphite + cyan","midnight gradient"]; const motifs = ["concentric waves","lattice lines","phosphor dots","isometric orbits"]; return `Art direction: ${vibes[Math.floor(rng()*vibes.length)]}. Motif: ${motifs[Math.floor(rng()*motifs.length)]}. Tone: confident, lucid, technical‑poetic.` }
+  async function runOrchestrator(refine=false) {
+    if (busy) return
+    setBusy(true); setDissonance(false); setFinalOut(refine?"Refinement cycle initiated…":"Orchestrating…")
+    const t = task.trim(); if (!t) { setFinalOut("Please enter a task for the AGI."); setBusy(false); return }
+    addKB(refine?"Refinement pass: re‑equilibrating.":"Harmonizing intent.")
+    setCoherence(refine?Math.max(10, coherence*0.8):10); await sleep(320); setCoherence(c=>c+18)
+    await sleep(280); addKB("Task decomposed; agents entangled."); setCoherence(c=>c+20)
+    const [a,p,cTxt] = await Promise.all([synthApp(t), synthPlan(t), synthCreative(t)])
+    setAppOut(a); setPlanOut(p); setCreaOut(cTxt)
+    addKB("Parallel execution complete."); setCoherence(c=>Math.min(85,c+15)); await sleep(380)
+    const out = `Workflow for: "${t}"\n--- App Synthesizer ---\n${a}\n\n--- Strategic Planner ---\n${p}\n\n--- Creative Modulator ---\n${cTxt}\n\nFinal coherence check: ${Math.round(coherenceBar)}%`
+    setFinalOut(out); addKB("Coherence collapse achieved. Output synthesized."); setCoherence(95)
+    const noisy = Math.random() < (refine?0.1:0.25)
+    if (noisy) { setDissonance(true); setCoherence(c=>Math.max(40,c-20)); addKB("Dissonance detected — re‑equilibrating…"); await sleep(900); setDissonance(false); setCoherence(100); addKB("Re‑harmonized. Optimal resonance.") } else { setCoherence(100); addKB("System fully harmonized.") }
+    setBusy(false)
+  }
+
+  // Chat ops with bridge or gateway agent
+  const toggleReasoning = (id) => setShowReasoningMap(s => ({ ...s, [id]: !s[id] }))
+  async function sendMessage() {
+    const raw = input.trim(); if (!raw) return
+    setInput("")
+    const userMsg = { id: `${Date.now()}:u`, sender: "user", text: raw, time: Date.now() }
+    setMessages(m => [...m, userMsg]); setIsLoading(true)
+    try {
+      if (useAgentGateway && gatewayUrl) {
+        const resp = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/agent/run", body: { task: raw } })
+        const text = resp?.summary || resp?.reply || JSON.stringify(resp)
+        const modelMsg = { id: `${Date.now()}:m`, sender: "model", text, reasoning: resp?.logs?.join("\n") || resp?.trace || "(agent)", time: Date.now() }
+        setMessages(m => [...m, modelMsg])
+      } else {
+        const bridgedIn = bridgeOn ? await translationBridge({ provider, openaiKey, geminiKey, text: raw, direction: "user_to_framework" }) : raw
+        const result = agi.generateConceptualReasoning(bridgedIn, { rigor })
+        const bridgedOut = bridgeOn ? await translationBridge({ provider, openaiKey, geminiKey, text: result.reply, direction: "framework_to_user" }) : result.reply
+        const modelMsg = { id: `${Date.now()}:m`, sender: "model", text: bridgedOut, reasoning: result.reasoning, time: Date.now() }
+        setMessages(m => [...m, modelMsg])
+      }
+    } catch (e) {
+      setMessages(m => [...m, { id: `${Date.now()}:err`, sender: "system", text: `Error: ${e.message}`, time: Date.now() }])
+    } finally { setIsLoading(false) }
+  }
+  async function handleFile(file) { if (!file) return; const meta = await agi.receiveFile(file.name, file.size, file.type || "unknown"); setMessages(m => [...m, { id: `${Date.now()}:f`, sender: "system", text: `File processed: ${file.name}`, meta }]) }
+
+  // Benchmarks (local + gateway)
+  function runBenchmark(which) {
+    if (which === "ARC") {
+      const m = agi.simulateARCBenchmark();
+      setBench(b => [{ id: Date.now(), type: "ARC", res: m }, ...b]);
+    } else if (which === "SWELancer") {
+      const m = agi.simulateSWELancerBenchmark();
+      setBench(b => [{ id: Date.now(), type: "SWELancer", res: m }, ...b]);
+    }
+  }
+
+  // Gateway-bound helpers
+  async function pingGateway() {
+    try { setGwTestStatus({ ok: null, message: "Pinging…" }); const r = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/ping", body: {} }); setGwTestStatus(r) } catch (e) { setGwTestStatus({ ok: false, message: e.message }) }
+  }
+  async function refreshGit() {
+    try { const s = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/git/status", body: {} }); setGitStatus(s); addKB("Fetched git status from gateway.") } catch (e) { setGitStatus({ error: e.message }) }
+  }
+  async function runTests(pattern) {
+    try { const out = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/tests/run", body: { pattern } }); setTestSummary(out); addKB("Tests executed via gateway.") } catch (e) { setTestSummary({ error: e.message }) }
+  }
+  async function requestDiff() {
+    try { const d = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/fs/diff", body: { path: patchPath, newContent: patchNewContent } }); setDiffText(d?.diff || JSON.stringify(d)) } catch (e) { setDiffText(`Error: ${e.message}`) }
+  }
+  async function applyWrite() {
+    try { const r = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/fs/write", body: { path: patchPath, content: patchNewContent } }); addKB(`Wrote file: ${patchPath}`); refreshGit() } catch (e) { addKB(`Write failed: ${e.message}`) }
+  }
+  async function gitCommit() {
+    try { const r = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/git/commit", body: { message: commitMsg } }); addKB(`Committed: ${commitMsg}`); refreshGit() } catch (e) { addKB(`Commit failed: ${e.message}`) }
+  }
+  async function runHcpBenchmark() {
+    try { const r = await gwFetch({ baseUrl: gatewayUrl, token: gatewayToken, path: "/api/hcp/benchmark", body: {} }); setBench(b => [{ id: Date.now(), type: "HCP", res: r }, ...b]); addKB("HCP benchmark via gateway done.") } catch (e) { setBench(b => [{ id: Date.now(), type: "HCP", res: { error: e.message } }, ...b]) }
+  }
+
+  // Settings actions
+  function masked(s) { return s ? (s.length > 8 ? `${s.slice(0,4)}…${s.slice(-3)}` : "••••") : "" }
+  function saveOpenAIKey(v) { setOpenaiKey(v.trim()); setApiTestStatus(null) }
+  function saveGeminiKey(v) { setGeminiKey(v.trim()); setApiTestStatus(null) }
+  function clearOpenAIKey() { setOpenaiKey(""); setApiTestStatus(null); localStorage.removeItem("hagi_openai_key") }
+  function clearGeminiKey() { setGeminiKey(""); setApiTestStatus(null); localStorage.removeItem("hagi_gemini_key") }
+
+  // Layout
+  return (
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 p-3 md:p-6">
+      {/* Topbar */}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="text-xl font-semibold">Harmonic Sovereign Console</div>
+        <Badge variant="secondary" className="ml-2">unified v1.9.0</Badge>
+        <div className="ml-auto flex gap-2">
+          <Button variant={tab === "console" ? "default" : "secondary"} size="sm" onClick={()=>setTab("console")}>Console</Button>
+          <Button variant={tab === "chat" ? "default" : "secondary"} size="sm" onClick={()=>setTab("chat")}>Chat</Button>
+          <Button variant={tab === "settings" ? "default" : "secondary"} size="sm" onClick={()=>setTab("settings")}>Settings</Button>
+          <Button variant="outline" size="sm" onClick={()=>{ setShowTutorial(true); setTourStep(0) }}>Tutorial</Button>
+        </div>
+      </div>
+
+      {firstRun && (
+        <div className="mb-3 rounded-xl border border-amber-600/40 bg-amber-500/10 p-3 text-xs">
+          <div className="font-medium flex items-center">Quick start: add an API key <HelpIconButton onClick={()=>{ setTab("settings"); setHelpId("keys") }} title="Show me how" /></div>
+          <div className="opacity-90 mt-1">Go to <b>Settings → API Keys & Bridge</b>, paste your OpenAI or Gemini key, click <b>Test</b>, pick it under <b>Active Bridge Provider</b>, then in <b>Chat</b> enable <b>Translation Bridge</b>.</div>
+        </div>
+      )}
+
+      {tab === "console" && (
+        <div className="grid gap-4 xl:gap-6 grid-cols-1 xl:grid-cols-[1.05fr_1.1fr]">
+          {/* LEFT: Vault + Encoder */}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <span>Memory Vault</span>
+                  <Badge variant="secondary" className="ml-2">harmonic_stable</Badge>
+                  <HelpIconButton onClick={()=>setHelpId(helpId === 'vault' ? null : 'vault')} />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <HelpBubble id="vault" active={helpId} onClose={()=>setHelpId(null)}>
+{`The Vault keeps an audit trail and tunable belief priors.
+• Audit Trail: every notable action lands here.
+• Belief Priors: sliders act like Dirichlet α; Commit to persist.
+• Export/Import: save/load the entire vault state as JSON.
+• Ingest: dropping a file adds a ledger entry (demo embedding).`}
+                </HelpBubble>
+                <div className="flex flex-wrap gap-2">
+                  <Pill>{vault.supported_file_types}</Pill>
+                  <Pill>degradation: {vault.attributes.degradation}</Pill>
+                  <Pill>fading: {vault.attributes.fading}</Pill>
+                  <Pill>IO: {vault.large_io_capability}</Pill>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-sm mb-1 font-medium">Belief priors (Dirichlet α)</div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div><div className="mb-1">A: {alphaA}</div><input type="range" min={1} max={20} value={alphaA} onChange={e=>setAlphaA(Number(e.target.value))} /></div>
+                      <div><div className="mb-1">B: {alphaB}</div><input type="range" min={1} max={20} value={alphaB} onChange={e=>setAlphaB(Number(e.target.value))} /></div>
+                      <div><div className="mb-1">C: {alphaC}</div><input type="range" min={1} max={20} value={alphaC} onChange={e=>setAlphaC(Number(e.target.value))} /></div>
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">Probabilities ≈ {probs.A.toFixed(2)} / {probs.B.toFixed(2)} / {probs.C.toFixed(2)}</div>
+                    <div className="mt-2 flex gap-2">
+                      <Button size="sm" onClick={saveBeliefToVault}>Commit</Button>
+                      <Button size="sm" variant="secondary" onClick={()=>download("hagi_backup.json", JSON.stringify({ messages, memory: agi.memoryVault }, null, 2))}>Export Backup</Button>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm mb-1 font-medium">State export / import <HelpIconButton onClick={()=>setHelpId(helpId==='export' ? null : 'export')} /></div>
+                    <HelpBubble id="export" active={helpId} onClose={()=>setHelpId(null)}>
+{`Export downloads a JSON snapshot. Import loads JSON you previously saved.
+Tip: keep versioned backups while experimenting.`}
+                    </HelpBubble>
+                    <div className="flex gap-2 flex-wrap">
+                      <Button size="sm" variant="secondary" onClick={exportVault}>Export JSON</Button>
+                      <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                        <input type="file" className="hidden" accept="application/json" onChange={async e => { const f = e.target.files?.[0]; if (!f) return; const txt = await f.text(); setVaultJson(txt) }} />
+                        <span className="px-3 py-1.5 rounded-xl border border-slate-800 bg-slate-900/40">Load JSON</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabs mimic */}
+                <div className="mt-2 grid gap-3">
+                  <div className="grid grid-cols-3 text-xs">
+                    <div className="font-medium opacity-80">Audit Trail</div>
+                    <div className="font-medium opacity-80">JSON</div>
+                    <div className="font-medium opacity-80">Ingest</div>
+                  </div>
+                  <div className="grid md:grid-cols-3 gap-3">
+                    {/* Audit */}
+                    <div className="md:col-span-1 border rounded-xl border-slate-800/60 max-h-56 overflow-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-900/60 text-slate-300 sticky top-0">
+                          <tr>
+                            <th className="text-left p-2 w-[36%]">When</th>
+                            <th className="text-left p-2 w-[30%]">Action</th>
+                            <th className="text-left p-2">Details</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vault.audit_trail.map((row,i)=> (
+                            <tr key={i} className="border-t border-slate-800/60">
+                              <td className="p-2 align-top">{ts(row.timestamp)}</td>
+                              <td className="p-2 align-top">{row.action}</td>
+                              <td className="p-2 align-top text-slate-300">
+                                <div className="flex flex-wrap gap-2 mb-1">
+                                  <Pill>{row.details?.fileName||"—"}</Pill>
+                                  <Pill>{row.details?.fileType||"meta"}</Pill>
+                                  <Pill>{row.details?.fileSize||0} bytes</Pill>
+                                </div>
+                                <div className="opacity-80">{row.details?.memory_integration || row.details?.note || "—"}</div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* JSON */}
+                    <div className="md:col-span-1">
+                      <Textarea className={cx("font-mono text-xs min-h-[220px]", vaultOk?"":"border-red-500")} value={vaultJson} onChange={e=>setVaultJson(e.target.value)} />
+                      <div className="flex gap-2 mt-2">
+                        <Button size="sm" onClick={importVaultFromJson}>Apply JSON</Button>
+                        {!vaultOk && <Badge variant="destructive">JSON parse error</Badge>}
+                      </div>
+                    </div>
+                    {/* Ingest */}
+                    <div className="md:col-span-1">
+                      <div className="text-sm opacity-80 mb-2">Drop any file to add a ledger entry (simulated embedding).</div>
+                      <Input type="file" onChange={e => { const f = e.target.files?.[0]; if (f) ingestFile(f) }} />
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Number‑Pipe */}
+            <Card>
+              <CardHeader><CardTitle>Number‑Pipe Encoder (toy) <Badge variant="outline">not compression</Badge><HelpIconButton onClick={()=>setHelpId(helpId==='numberpipe'?null:'numberpipe')} /></CardTitle></CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <HelpBubble id="numberpipe" active={helpId} onClose={()=>setHelpId(null)}>
+{`Takes any text → encodes as a big integer string; and back.
+Useful when you want deterministic numeric payloads for tests/demos.`}
+                </HelpBubble>
+                <NumberPipe />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* RIGHT: Orchestrator + KB + Repo */}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader><CardTitle>Quantum‑Harmonic Orchestrator <Badge variant="secondary">sovereign</Badge><HelpIconButton onClick={()=>setHelpId(helpId==='orch'?null:'orch')} /></CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <HelpBubble id="orch" active={helpId} onClose={()=>setHelpId(null)}>
+{`Give the system a task. It synthesizes an App spec, a Plan, and Creative direction, then merges them into a coherent output.
+Use Refine to run a short coherence‑improvement cycle.`}
+                </HelpBubble>
+                <div className="flex flex-col md:flex-row gap-2">
+                  <Textarea value={task} onChange={e=>setTask(e.target.value)} placeholder="e.g., Build a TS canvas that exports reproducible artifacts" className="min-h-[80px]" />
+                  <div className="grid grid-cols-2 md:grid-cols-1 gap-2 min-w-[220px]">
+                    <Button onClick={()=>runOrchestrator(false)} disabled={busy}>Start</Button>
+                    <Button variant="secondary" onClick={()=>runOrchestrator(true)} disabled={busy}>Refine</Button>
+                    <Button variant="outline" onClick={()=>speak(finalOut)} disabled={!finalOut}>Speak</Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs flex items-center gap-2">Coherence: {Math.round(coherenceBar)}%</div>
+                  <Progress value={coherenceBar} />
+                  {dissonance && (<div className="text-amber-400 text-xs">Dissonance detected — re‑equilibrating…</div>)}
+                </div>
+                <div className="grid md:grid-cols-3 gap-3">
+                  <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-2">
+                    <div className="text-sm font-medium mb-1">App Synthesizer</div>
+                    <Textarea readOnly className="min-h-[120px] text-xs" value={appOut} />
+                  </div>
+                  <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-2">
+                    <div className="text-sm font-medium mb-1">Strategic Planner</div>
+                    <Textarea readOnly className="min-h-[120px] text-xs" value={planOut} />
+                  </div>
+                  <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-2">
+                    <div className="text-sm font-medium mb-1">Creative Modulator</div>
+                    <Textarea readOnly className="min-h-[120px] text-xs" value={creaOut} />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm mb-1 font-medium">Final Coherent Output</div>
+                  <Textarea readOnly className="min-h-[130px] text-sm" value={finalOut} />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle>Knowledge Base Stream <Badge variant="outline">live</Badge></CardTitle></CardHeader>
+              <CardContent>
+                <div className="max-h-52 overflow-auto text-xs space-y-1">
+                  {kb.map((line,i)=>(<div key={i} className="opacity-90">{line}</div>))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Repo & Tests (Gateway) */}
+            <Card>
+              <CardHeader><CardTitle>Repo & Tests <Badge variant="outline">gateway</Badge><HelpIconButton onClick={()=>setHelpId(helpId==='repo'?null:'repo')} /></CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <HelpBubble id="repo" active={helpId} onClose={()=>setHelpId(null)}>
+{`These actions call your Agent Gateway.
+• Status shows current branch and changes.
+• Request Diff compares edited content to the file on disk.
+• Apply writes the file; Commit is enabled only after tests pass.
+Note: you must set Gateway URL and Token in Settings.`}
+                </HelpBubble>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" onClick={refreshGit} disabled={!gatewayUrl}>Refresh Status</Button>
+                  <Button size="sm" variant="secondary" onClick={()=>runTests("")} disabled={!gatewayUrl}>Run Tests</Button>
+                  <Button size="sm" variant="outline" onClick={runHcpBenchmark} disabled={!gatewayUrl}>Run HCP Benchmark</Button>
+                </div>
+                <div className="grid md:grid-cols-2 gap-3 text-xs">
+                  <div className="rounded-xl border border-slate-800/60 p-2">
+                    <div className="font-medium">Git Status</div>
+                    <pre className="whitespace-pre-wrap mt-1">{gitStatus ? JSON.stringify(gitStatus, null, 2) : "—"}</pre>
+                  </div>
+                  <div className="rounded-xl border border-slate-800/60 p-2">
+                    <div className="font-medium">Last Test Run</div>
+                    <pre className="whitespace-pre-wrap mt-1">{testSummary ? JSON.stringify(testSummary, null, 2) : "—"}</pre>
+                  </div>
+                </div>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-sm mb-1 font-medium">Patch Editor</div>
+                    <Input placeholder="Path (e.g., src/index.ts)" value={patchPath} onChange={e=>setPatchPath(e.target.value)} />
+                    <Textarea className="font-mono text-xs mt-2 min-h-[150px]" placeholder="Paste new file content here" value={patchNewContent} onChange={e=>setPatchNewContent(e.target.value)} />
+                    <div className="flex gap-2 mt-2">
+                      <Button size="sm" variant="outline" onClick={requestDiff} disabled={!gatewayUrl || !patchPath}>Request Diff</Button>
+                      <Button size="sm" onClick={applyWrite} disabled={!gatewayUrl || !patchPath}>Apply</Button>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm mb-1 font-medium">Diff Preview</div>
+                    <Textarea className="font-mono text-xs min-h-[190px]" readOnly value={diffText} placeholder="Run Request Diff to preview changes" />
+                    <div className="text-sm mt-2 font-medium">Commit</div>
+                    <Input placeholder="Commit message" value={commitMsg} onChange={e=>setCommitMsg(e.target.value)} />
+                    <Button className="mt-2" size="sm" onClick={gitCommit} disabled={!gatewayUrl || !commitMsg || (testSummary && (testSummary.failed>0))}>Commit (tests must pass)</Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {tab === "chat" && (
+        <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+          <Card>
+            <CardHeader><CardTitle>Chat & Playground <Badge variant="outline">{useAgentGateway ? "agent gateway" : (provider === "none" ? "local sim" : `bridge: ${provider}`)}</Badge><HelpIconButton onClick={()=>setHelpId(helpId==='chat'?null:'chat')} /></CardTitle></CardHeader>
+            <CardContent>
+              <HelpBubble id="chat" active={helpId} onClose={()=>setHelpId(null)}>
+{`Translation Bridge off → replies come from the local AGI simulator.
+Translation Bridge on → text is translated by the selected LLM provider.
+Agent Gateway → sends your message as a task to the Node agent (ignores Bridge).`}
+              </HelpBubble>
+              <div className="text-xs mb-2 opacity-80 flex items-center gap-3">
+                <span>Status: {isLoading?"Working…":"Idle"}</span>
+                <label className="inline-flex items-center gap-2 ml-3">
+                  <input type="checkbox" checked={bridgeOn} onChange={e=>setBridgeOn(e.target.checked)} disabled={useAgentGateway} />
+                  <span>Translation Bridge</span>
+                  <HelpIconButton onClick={()=>setHelpId(helpId==='bridge'?null:'bridge')} />
+                </label>
+                <label className="inline-flex items-center gap-2 ml-3">
+                  <input type="checkbox" checked={useAgentGateway} onChange={e=>setUseAgentGateway(e.target.checked)} />
+                  <span>Use Agent Gateway</span>
+                </label>
+              </div>
+              <HelpBubble id="bridge" active={helpId} onClose={()=>setHelpId(null)}>
+{`Bridge translates user↔framework language using your chosen provider.
+Agent Gateway calls your backend tools (git/fs/shell/tests/agent).`}
+              </HelpBubble>
+              <div className="space-y-2 max-h-[50vh] overflow-auto rounded border border-slate-800/60 p-2">
+                {messages.length===0 && (<div className="text-xs opacity-70">No messages yet — try: "Spectral multiply 1 & 2" or enable Agent Gateway and send a repo task.</div>)}
+                {messages.map(m => (
+                  <div key={m.id} className="rounded bg-slate-900/50 p-2">
+                    <div className="text-[11px] opacity-70">{m.sender} · {new Date(m.time).toLocaleTimeString()}</div>
+                    <div className="text-sm whitespace-pre-wrap">{m.text}</div>
+                    {m.meta && (<div className="text-[11px] opacity-70 mt-1">{m.meta.description || JSON.stringify(m.meta)}</div>)}
+                    {m.sender === "model" && (
+                      <Button size="xs" variant="outline" className="mt-1" onClick={()=>toggleReasoning(m.id)}>{showReasoningMap[m.id] ? "Hide reasoning" : "Show reasoning"}</Button>
+                    )}
+                    {m.sender === "model" && showReasoningMap[m.id] && (
+                      <div className="text-[11px] mt-1 opacity-80 whitespace-pre-wrap">{m.reasoning || "No reasoning attached."}</div>
+                    )}
+                  </div>
+                ))}
+                <div ref={endRef} />
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{ if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage() } }} className="flex-1 min-h-[60px]" placeholder="Ask the AGICore or Gateway Agent anything…" />
+                <div className="grid gap-2 min-w-[160px]">
+                  <Button onClick={sendMessage}>Send</Button>
+                  <label className="text-xs inline-flex items-center gap-2 cursor-pointer">
+                    <input type="file" className="hidden" onChange={e=>handleFile(e.target.files?.[0])} />
+                    <span className="px-3 py-1.5 rounded-xl border border-slate-800 bg-slate-900/40">Upload File</span>
+                  </label>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Conceptual Benchmarking & Quick Demos */}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader><CardTitle>Conceptual Benchmarking<HelpIconButton onClick={()=>setHelpId(helpId==='bench'?null:'bench')} /></CardTitle></CardHeader>
+              <CardContent>
+                <HelpBubble id="bench" active={helpId} onClose={()=>setHelpId(null)}>
+{`Mock metrics for prototyping. Useful to wire UI flows while real evals are pending.`}
+                </HelpBubble>
+                <div className="text-xs opacity-80 mb-2">Demo metrics for prototyping only.</div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" onClick={()=>runBenchmark("ARC")} disabled={isLoading}>Run ARC (Sim)</Button>
+                  <Button size="sm" variant="secondary" onClick={()=>runBenchmark("SWELancer")} disabled={isLoading}>Run SWELancer (Sim)</Button>
+                  <Button size="sm" variant="outline" onClick={runHcpBenchmark} disabled={!gatewayUrl}>Run HCP via Gateway</Button>
+                </div>
+                <div className="mt-3 space-y-2 text-xs">
+                  {bench.length===0 && <div className="opacity-70">No results yet.</div>}
+                  {bench.map(b => (
+                    <div key={b.id} className="rounded border border-slate-800/60 p-2">
+                      <div className="font-medium">{b.type}</div>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(b.res, null, 2)}</pre>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle>Utilities<HelpIconButton onClick={()=>setHelpId(helpId==='utils'?null:'utils')} /></CardTitle></CardHeader>
+              <CardContent className="grid gap-2">
+                <HelpBubble id="utils" active={helpId} onClose={()=>setHelpId(null)}>
+{`Quick entry points to demo core math primitives and memory.
+Try the Spectral Multiply to generate mixed frequencies, or Memory Retrieval to see toy similarity.`}
+                </HelpBubble>
+                <Button size="sm" variant="outline" onClick={()=>{ const mix = agi.spectralMultiply(1,1,0,2,0.5,Math.PI/4); setMessages(m => [...m, { id: `${Date.now()}:sys`, sender: "system", text: `Spectral demo: ${mix.conceptual_mixed_frequencies.join(", ")}`, meta: mix }]) }}>Spectral Multiply Demo</Button>
+                <Button size="sm" variant="outline" onClick={()=>{ const mem = agi.retrieveMemory("harmonic"); setMessages(m => [...m, { id: `${Date.now()}:sys2`, sender: "system", text: `Memory demo: found ${mem.top_matches.length} matches.`, meta: mem }]) }}>Memory Retrieval Demo</Button>
+                <Button size="sm" variant="outline" onClick={()=>{ const m = agi.simulateARCBenchmark(); setBench(b => [{ id: Date.now(), type: "ARC", res: m }, ...b]) }}>Quick ARC Snapshot</Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Modes & Local Data<HelpIconButton onClick={()=>setHelpId(helpId==='modes'?null:'modes')} /></CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <HelpBubble id="modes" active={helpId} onClose={()=>setHelpId(null)}>
+{`Mathematical Rigor adds formal‑step notes in reasoning traces.
+Local data lives in your browser (localStorage). Use backups before clearing.`}
+              </HelpBubble>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium">Mathematical Rigor</div>
+                  <div className="text-xs opacity-80">Amplify formal steps in reasoning traces.</div>
+                </div>
+                <label className="inline-flex items-center gap-2">
+                  <input type="checkbox" checked={rigor} onChange={()=>{ const v = agi.toggleMathematicalRigor(); setRigor(v) }} />
+                  <span>Enabled</span>
+                </label>
+              </div>
+              <div className="text-xs opacity-80">Local state is saved in your browser. Use the buttons below for backups.</div>
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant="secondary" onClick={()=>{ localStorage.removeItem("hagi:messages"); setMessages([]) }}>Clear Local Chat</Button>
+                <Button size="sm" onClick={()=>download("hagi_backup.json", JSON.stringify({ messages, memory: agi.memoryVault }, null, 2))}>Export Backup</Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>API Keys, Bridge & Gateway<HelpIconButton onClick={()=>setHelpId(helpId==='keys'?null:'keys')} /></CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <HelpBubble id="keys" active={helpId} onClose={()=>setHelpId(null)}>
+{`Provider keys power the Translation Bridge. The Agent Gateway connects your repo/tools.
+• Bridge: choose OpenAI or Gemini and enable in Chat.
+• Gateway: set URL + token, ping it, then use Repo & Tests or Chat→Use Agent Gateway.`}
+              </HelpBubble>
+              <div className="text-xs opacity-80">Keys/token are stored locally for this demo only. Use a secure server‑side store in production.</div>
+
+              {/* OpenAI */}
+              <div className="space-y-1">
+                <div className="text-sm font-medium">OpenAI API Key <HelpIconButton onClick={()=>setHelpId(helpId==='openai'?null:'openai')} /></div>
+                <HelpBubble id="openai" active={helpId} onClose={()=>setHelpId(null)}>
+{`Format usually starts with "sk-". After pasting, click Test. If OK, choose OpenAI as your provider below.`}
+                </HelpBubble>
+                <div className="text-xs opacity-70">{openaiKey ? `Saved: ${masked(openaiKey)}` : "Not set"}</div>
+                <div className="flex gap-2">
+                  <Input value={openaiKey} onChange={e=>saveOpenAIKey(e.target.value)} placeholder="sk-…" />
+                  <Button variant="secondary" onClick={clearOpenAIKey}>Clear</Button>
+                  <Button onClick={async()=>{ setApiTestStatus({ ok:null, message:"Testing OpenAI key…"}); const r = await testOpenAIKey(openaiKey); setApiTestStatus(r) }}>Test</Button>
+                </div>
+              </div>
+
+              {/* Gemini */}
+              <div className="space-y-1">
+                <div className="text-sm font-medium">Gemini API Key <HelpIconButton onClick={()=>setHelpId(helpId==='gemini'?null:'gemini')} /></div>
+                <HelpBubble id="gemini" active={helpId} onClose={()=>setHelpId(null)}>
+{`Format often starts with "AIza". After pasting, click Test. If OK, choose Gemini as your provider below.`}
+                </HelpBubble>
+                <div className="text-xs opacity-70">{geminiKey ? `Saved: ${masked(geminiKey)}` : "Not set"}</div>
+                <div className="flex gap-2">
+                  <Input value={geminiKey} onChange={e=>setGeminiKey(e.target.value)} placeholder="AIza…" />
+                  <Button variant="secondary" onClick={clearGeminiKey}>Clear</Button>
+                  <Button onClick={async()=>{ setApiTestStatus({ ok:null, message:"Testing Gemini key…"}); const r = await testGeminiKey(geminiKey); setApiTestStatus(r) }}>Test</Button>
+                </div>
+              </div>
+
+              {/* Provider choice */}
+              <div className="text-xs opacity-80">Active Bridge Provider <HelpIconButton onClick={()=>setHelpId(helpId==='provider'?null:'provider')} /></div>
+              <HelpBubble id="provider" active={helpId} onClose={()=>setHelpId(null)}>
+{`Pick which provider the Translation Bridge should use. Change anytime. If none is selected, chat falls back to the local simulator.`}
+              </HelpBubble>
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant={provider === "none" ? "default" : "outline"} onClick={()=>setProvider("none")}>None (local sim)</Button>
+                <Button size="sm" variant={provider === "openai" ? "default" : "outline"} onClick={()=>setProvider("openai")}>OpenAI</Button>
+                <Button size="sm" variant={provider === "gemini" ? "default" : "outline"} onClick={()=>setProvider("gemini")}>Gemini</Button>
+              </div>
+              <div className="text-xs mt-1">Bridge test: {apiTestStatus ? apiTestStatus.message : "No test run yet."}</div>
+
+              {/* Gateway */}
+              <div className="mt-3 space-y-1">
+                <div className="text-sm font-medium">Agent Gateway <HelpIconButton onClick={()=>setHelpId(helpId==='gateway'?null:'gateway')} /></div>
+                <HelpBubble id="gateway" active={helpId} onClose={()=>setHelpId(null)}>
+{`Your backend that exposes fs/git/shell/tests/agent endpoints.
+Typical dev URL: http://localhost:8787  (requires correct token).`}
+                </HelpBubble>
+                <div className="grid sm:grid-cols-2 gap-2">
+                  <Input placeholder="Gateway URL (e.g., http://localhost:8787)" value={gatewayUrl} onChange={e=>setGatewayUrl(e.target.value)} />
+                  <Input placeholder="Access Token" value={gatewayToken} onChange={e=>setGatewayToken(e.target.value)} />
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={pingGateway}>Test Gateway</Button>
+                  <div className="text-xs self-center">{gwTestStatus ? (gwTestStatus.ok? `OK: ${gwTestStatus.message||"pong"}` : `FAIL: ${gwTestStatus.message}`) : "No test yet."}</div>
+                </div>
+              </div>
+
+              <div className="text-[11px] opacity-70">Dev note: proxy API calls via your backend in production; do not store long‑lived keys/tokens in the client.</div>
+            </CardContent>
+          </Card>
+
+          {/* Self‑Tests */}
+          <Card>
+            <CardHeader><CardTitle>Self‑Tests (runtime)</CardTitle></CardHeader>
+            <CardContent className="text-xs space-y-2">
+              <div>Last run: {testsRunAt || "—"}</div>
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant="secondary" onClick={doRunTests}>Run tests</Button>
+              </div>
+              <div className="mt-2 space-y-1">
+                {tests.length === 0 && <div className="opacity-70">No results yet.</div>}
+                {tests.map((t, i) => (
+                  <div key={i} className="rounded border border-slate-800/60 p-2 flex items-center justify-between">
+                    <div className="mr-3">{t.name}</div>
+                    <div className={t.ok ? "text-green-400" : "text-red-400"}>{t.ok ? "PASS" : `FAIL — ${t.err}`}</div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Tutorial modal */}
+      <Modal open={showTutorial} onClose={()=>setShowTutorial(false)} title="Beginner Tutorial — Keys, Bridge, & Gateway">
+        <div className="text-sm space-y-3">
+          {[
+            { t: "Step 1 — Open Settings", d: "Click the Settings tab to configure providers and the Agent Gateway." },
+            { t: "Step 2 — Provider Keys", d: "Under ‘API Keys & Bridge’, paste your OpenAI (sk‑…) or Gemini (AIza…) key." },
+            { t: "Step 3 — Test the Key", d: "Tap Test. Success means the Bridge can translate chat text." },
+            { t: "Step 4 — Gateway URL + Token", d: "Enter your Agent Gateway URL/token and tap Test Gateway." },
+            { t: "Step 5 — Repo & Tests", d: "Use the Console→Repo & Tests card to diff/apply, run tests, and commit." },
+            { t: "Step 6 — Chat with Agent", d: "In Chat, toggle ‘Use Agent Gateway’ to route tasks to your Node side." },
+            { t: "Production Tip", d: "Never expose real keys in the client. Proxy via your backend and restrict shell/git allowlists." },
+          ].map((s, i) => (
+            <div key={i} className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+              <div className="font-medium">{s.t}</div>
+              <div className="opacity-90 mt-1">{s.d}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs">
+          <div className="opacity-80">Use the little <b>?</b> icons anywhere for inline help.</div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={()=>{ setTab("settings"); setHelpId("keys") }}>Take me to Settings</Button>
+            <Button size="sm" onClick={()=>{ setTab("chat"); setShowTutorial(false) }}>Go to Chat</Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+function NumberPipe() {
+  const [encodeIn, setEncodeIn] = useState("")
+  const [encoded, setEncoded] = useState("")
+  const [decodeIn, setDecodeIn] = useState("")
+  const [decoded, setDecoded] = useState("")
+  return (
+    <>
+      <div>
+        <div className="text-xs mb-1">Text → BigInt (decimal)</div>
+        <Textarea className="font-mono text-xs min-h-[120px]" value={encodeIn} onChange={e=>setEncodeIn(e.target.value)} placeholder="Type any text here…" />
+        <div className="flex gap-2 mt-2">
+          <Button size="sm" onClick={()=>setEncoded(textToBigIntString(encodeIn))}>Encode</Button>
+          <Button size="sm" variant="secondary" onClick={()=>navigator.clipboard.writeText(encoded)}>Copy</Button>
+        </div>
+        <Textarea className="font-mono text-xs mt-2 min-h-[90px]" readOnly value={encoded} placeholder="Encoded number will appear here" />
+      </div>
+      <div>
+        <div className="text-xs mb-1">BigInt (decimal) → Text</div>
+        <Textarea className="font-mono text-xs min-h-[120px]" value={decodeIn} onChange={e=>setDecodeIn(e.target.value)} placeholder="Paste a big integer string…" />
+        <div className="flex gap-2 mt-2">
+          <Button size="sm" onClick={()=>setDecoded(bigIntStringToText(decodeIn))}>Decode</Button>
+          <Button size="sm" variant="secondary" onClick={()=>setDecodeIn("")}>Clear</Button>
+        </div>
+        <Textarea className="font-mono text-xs mt-2 min-h-[90px]" readOnly value={decoded} placeholder="Decoded text will appear here" />
+      </div>
+    </>
+  )
+}

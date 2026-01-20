@@ -1,0 +1,67 @@
+# AGI Chat Interface (v2.6.3)
+
+A single-page React app for interacting with LLMs (Gemini/OpenAI), translating text, and building JSX/TSX projects. Enhanced with a harmonic scheduler, typed IO ports, offline-first state, and JSON export.
+
+## Features
+- **Chat**: Interact with Gemini or OpenAI LLMs via a clean chat interface. Supports slash commands (e.g., `/to=de Hallo` for translation).
+- **Translator**: LLM-powered translation with source/target language selection.
+- **Builder**: Virtual filesystem to create, edit, and run JSX/TSX projects (TSX uses esbuild API).
+- **Settings**: Configure provider, model, API keys, and proxy settings.
+- **Harmonic Scheduler**: Prioritizes tasks (chat, translate, build) based on harmonic resonance.
+- **Typed IO Ports**: Ensures reliable data input/output with strict schemas.
+- **Offline-First**: Persists state in localStorage; queues network tasks when offline.
+- **JSON Export**: Exports settings, filesystem, chat history, and scheduler logs.
+
+## Setup
+1. **Run Locally**:
+   - Save `index.html` and open in a browser (e.g., `file://` or via a local server like `npx serve`).
+   - No server required for core functionality (uses localStorage).
+2. **Configure API Keys**:
+   - Go to "Settings" tab.
+   - Enter Gemini or OpenAI API key (obfuscated in localStorage).
+   - Optionally enable server proxy (`http://localhost:8787/relay`) for production.
+3. **Proxy Setup (Optional)**:
+   ```javascript
+   const express = require('express');
+   const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
+   const app = express();
+   app.use(express.json());
+   app.post('/relay', async (req, res) => {
+     const { provider, model, messages } = req.body;
+     try {
+       if (provider === 'openai') {
+         const r = await fetch('https://api.openai.com/v1/chat/completions', {
+           method: 'POST',
+           headers: { 'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY, 'Content-Type': 'application/json' },
+           body: JSON.stringify({ model, messages, temperature: 0.2 })
+         });
+         return res.status(r.status).json(await r.json());
+       } else {
+         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+           method: 'POST', headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{ text:m.content }]})) })
+         });
+         return res.status(r.status).json(await r.json());
+       }
+     } catch (e) { res.status(500).json({ error: e.message }); }
+   });
+   app.listen(8787, () => console.log('Proxy on http://localhost:8787/relay'));
+   ```
+   Set `OPENAI_API_KEY` and `GOOGLE_API_KEY` in environment variables.
+
+## Usage
+- **Chat**: Type messages or use `/to=<lang> <text>` for translations.
+- **Translator**: Enter text, select languages, and click "Translate".
+- **Builder**: Add/edit files (e.g., `index.jsx`), set entry point, and click "Run".
+- **Settings**: Configure provider (Gemini/OpenAI), models, and keys.
+- **Export**: Click "Export State" to save settings, filesystem, chat history, and logs as `agi_state_v263.json`.
+
+## Offline Mode
+- State (settings, filesystem, chat history) persists in localStorage.
+- Network tasks (chat, translate) are queued when offline and processed when online.
+- Builder works offline for JSX; TSX requires network for esbuild.
+
+## Art Direction
+- **Neon on Slate**:
+
+```

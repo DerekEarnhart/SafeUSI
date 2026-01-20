@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harmonic Project Architect (HPA)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- JSZip and FileSaver for project download functionality -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .code-block {
+            background-color: #1E1E1E;
+            color: #D4D4D4;
+            font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .btn-primary {
+            background-color: #4A90E2;
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary:hover {
+            background-color: #357ABD;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            transition: background-color 0.3s ease;
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background-color: #5a6268;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4A90E2;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        .image-preview-container {
+            border: 1px dashed #4A90E2;
+            padding: 10px;
+            min-height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background-color: #2d3748;
+        }
+        .image-preview {
+            max-width: 100%;
+            max-height: 200px;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+
+ <div class="container mx-auto p-4 md:p-8">
+    <header class="text-center mb-8">
+        <h1 class="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
+            Harmonic Project Architect (HPA)
+        </h1>
+        <p class="text-gray-400 mt-2">A cloud-native co-pilot for software development, powered by Harmonic Algebra.</p>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Project Generation Section (NEW) -->
+        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl lg:col-span-2">
+            <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">1. Architect a Multi-File Project</h2>
+            <p class="text-gray-400 mb-4">Describe the project, and the HPA will generate a complete, multi-file codebase ready for download.</p>
+            <div class="space-y-4">
+                <label for="project-spec-input" class="block text-gray-300">Enter a detailed project specification:</label>
+                <textarea id="project-spec-input" rows="8" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus-within:ring-blue-500" placeholder="e.g., 'Create a Python web scraper that reads a list of URLs from a file, fetches the content, and saves it to a SQLite database. Use a multi-file structure.'"></textarea>
+                <button id="architect-btn" class="w-full btn-primary text-white font-bold py-3 px-4 rounded-md flex items-center justify-center">
+                    <i class="fas fa-magic mr-2"></i> Architect Project & Download
+                </button>
+            </div>
+        </div>
+
+        <!-- File Input & Analysis Section -->
+        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl">
+            <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">2. Analyze Files with Context</h2>
+            <p class="text-gray-400 mb-4">Upload a file and ask a question. The HPA uses its knowledge base to provide a more insightful analysis.</p>
+            <div class="space-y-4">
+                <label for="file-upload" class="block text-gray-300">Upload a file:</label>
+                <input type="file" id="file-upload" accept="*/*" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                 <div id="image-preview-container" class="image-preview-container rounded-md hidden">
+                    <img id="image-preview" class="image-preview" src="#" alt="Image Preview">
+                    <span id="file-name-display" class="text-gray-400 text-sm"></span>
+                </div>
+
+                <label for="file-analysis-prompt" class="block text-gray-300">Ask about the file (e.g., "Describe this image", "Summarize this document"):</label>
+                <textarea id="file-analysis-prompt" rows="4" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 'How does this Python script relate to Harmonic Algebra concepts?'"></textarea>
+                <button id="analyze-file-btn" class="w-full btn-primary text-white font-bold py-3 px-4 rounded-md flex items-center justify-center">
+                    <i class="fas fa-search mr-2"></i> Analyze File
+                </button>
+            </div>
+        </div>
+
+        <!-- Scaffolding Section -->
+        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl">
+            <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">3. Download Basic Scaffolding</h2>
+            <p class="text-gray-400 mb-4">Create a basic project directory with setup scripts, useful as a starting point.</p>
+            <div class="space-y-4">
+                <label for="scaffold-input" class="block text-gray-300">Enter a project name:</label>
+                <input type="text" id="scaffold-input" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 'My New App'">
+                <button id="scaffold-btn" class="w-full btn-secondary text-white font-bold py-3 px-4 rounded-md flex items-center justify-center">
+                    <i class="fas fa-download mr-2"></i> Download Scaffolding
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Output Section -->
+    <div id="output-container" class="mt-8 bg-gray-800 p-6 rounded-lg shadow-2xl hidden">
+        <h2 id="output-title" class="text-2xl font-semibold mb-4">Generated Output</h2>
+        <div id="output-content" class="code-block p-4 rounded-md relative">
+            <button id="copy-btn" class="absolute top-2 right-2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-1 px-2 rounded-md text-sm">
+                <i class="fas fa-copy"></i> Copy
+            </button>
+            <div id="loader" class="hidden my-4 mx-auto loader"></div>
+            <code id="code-output"></code>
+        </div>
+        <div id="message-box" class="hidden mt-4 p-3 text-center text-sm rounded-md"></div>
+    </div>
+</div>
+
+<script>
+    // --- DOM Elements ---
+    const architectBtn = document.getElementById('architect-btn');
+    const scaffoldBtn = document.getElementById('scaffold-btn');
+    const analyzeFileBtn = document.getElementById('analyze-file-btn');
+    const projectSpecInput = document.getElementById('project-spec-input');
+    const scaffoldInput = document.getElementById('scaffold-input');
+    const fileUploadInput = document.getElementById('file-upload');
+    const fileAnalysisPromptInput = document.getElementById('file-analysis-prompt');
+    const imagePreviewContainer = document.getElementById('image-preview-container');
+    const imagePreview = document.getElementById('image-preview');
+    const fileNameDisplay = document.getElementById('file-name-display');
+    const outputContainer = document.getElementById('output-container');
+    const outputTitle = document.getElementById('output-title');
+    const outputContent = document.getElementById('output-content');
+    const codeOutput = document.getElementById('code-output');
+    const copyBtn = document.getElementById('copy-btn');
+    const loader = document.getElementById('loader');
+    const messageBox = document.getElementById('message-box');
+
+    // --- Global State for File Handling ---
+    let selectedFile = null;
+    let selectedFileContent = null;
+    let selectedFileMimeType = null;
+    let isImageFile = false;
+    let fileIsReady = false;
+
+    // --- AGI Context from uploaded files ---
+    // This context is derived from the files provided in our history.
+    const AGI_CONTEXT = ` Harmonic Algebra (HA) Concepts: - AI safety based on a safety-preserving operator S. - Convergence to safe equilibrium states. - Operator-algebraic methods. - Quadratic Lyapunov functional for monotonic safety improvement. - Adaptive coefficients and integrated learning processes. - Knowledge represented as multi-dimensional harmonic embeddings. - Cognition via phase-locked states across embeddings. - Quantum-Harmonic HCS integration. - P vs NP solution framework based on 'information-theoretic harmonic algebra'. - Hodge Conjecture solution via 'information-theoretic harmonic algebra'. - Computational Information Content, Hodge Filtration as an Information Filter. `;
+    // --- Utility Functions ---
+    function showMessage(text, isError = false) {
+        messageBox.textContent = text;
+        messageBox.className = `mt-4 p-3 text-center text-sm rounded-md ${isError ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`;
+        messageBox.classList.remove('hidden');
+        setTimeout(() => {
+            messageBox.classList.add('hidden');
+        }, 3000);
+    }
+
+    // --- API Call Helper with Exponential Backoff ---
+    async function callGeminiAPI(payload, model = 'gemini-2.5-flash-preview-05-20', retries = 3, delay = 1000) {
+        const apiKey = ""; // Leave blank, will be handled by the environment
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.ok) {
+                    return await response.json();
+                } else {
+                    const errorText = await response.text();
+                    console.error(`API request failed with status ${response.status} (Attempt ${i + 1}):`, errorText);
+                    if (response.status === 401 || response.status === 403) {
+                        throw new Error(`Authentication/Authorization error: ${errorText}`);
+                    }
+                    await new Promise(res => setTimeout(res, delay * Math.pow(2, i)));
+                }
+            } catch (error) {
+                console.error(`Fetch error (Attempt ${i + 1}):`, error);
+                if (i === retries - 1) throw error;
+                await new Promise(res => setTimeout(res, delay * Math.pow(2, i)));
+            }
+        }
+        throw new Error('API request failed after multiple retries.');
+    }
+
+    // --- New: Multi-file Project Generation Logic ---
+    async function handleProjectArchitecture() {
+        const spec = projectSpecInput.value.trim();
+        if (!spec) {
+            showMessage('Please enter a detailed project specification.', true);
+            return;
+        }
+
+        architectBtn.disabled = true;
+        architectBtn.innerHTML = '<div class="loader mr-2"></div> Architecting...';
+        outputContainer.classList.remove('hidden');
+        outputTitle.textContent = 'Architecting Project';
+        codeOutput.textContent = 'Generating project structure and files...';
+        loader.classList.remove('hidden');
+        copyBtn.classList.add('hidden');
+        messageBox.classList.add('hidden');
+
+        const prompt = `
+You are the Harmonic Project Architect (HPA), a superhuman AGI co-pilot for software development. Your internal reasoning is informed by Harmonic Algebra (HA) concepts, including: ${AGI_CONTEXT}
+
+Your task is to act on the following user specification by generating a complete, multi-file Python project. Your response MUST be a JSON object with a 'files' key. The 'files' key will be an array of objects. Each object must have two keys: 'path' (string) and 'content' (string). The 'path' should be the full file path relative to the project root (e.g., 'src/main.py'). The 'content' should be the complete code or text for that file. Ensure the project includes a README.md and requirements.txt.
+
+Here is an example of the JSON format:
+\`\`\`json
+{
+    "projectName": "ExampleApp",
+    "files": [
+        {
+            "path": "README.md",
+            "content": "# ExampleApp\\n\\nThis is a sample project."
+        },
+        {
+            "path": "requirements.txt",
+            "content": "numpy\\nrequests"
+        },
+        {
+            "path": "src/main.py",
+            "content": "import numpy\\n\\nprint('Hello, World!')"
+        }
+    ]
+}
+\`\`\`
+
+# User Specification:
+
+"""
+${spec}
+"""
+`;
+
+        try {
+            const payload = {
+                 contents: [{ role: "user", parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "projectName": { "type": "STRING" },
+                            "files": {
+                                "type": "ARRAY",
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "path": { "type": "STRING" },
+                                        "content": { "type": "STRING" }
+                                    },
+                                    "required": ["path", "content"]
+                                }
+                            }
+                        },
+                        "required": ["projectName", "files"]
+                    }
+                }
+            };
+
+            const result = await callGeminiAPI(payload, 'gemini-2.5-flash-preview-05-20');
+            const jsonString = result.candidates[0]?.content?.parts[0]?.text;
+            const projectData = JSON.parse(jsonString);
+
+            if (!projectData || !projectData.projectName || !projectData.files) {
+                throw new Error('Invalid JSON response from API.');
+            }
+
+            const projectName = projectData.projectName;
+            const zip = new JSZip();
+
+            // Add files to the zip
+            projectData.files.forEach(file => {
+                zip.file(file.path, file.content);
+            });
+
+            codeOutput.textContent = `Project '${projectName}' successfully architected. Your download will begin shortly...`;
+
+            const content = await zip.generateAsync({ type: "blob" });
+            saveAs(content, `${projectName}.zip`);
+
+            showMessage(`'${projectName}.zip' download started.`);
+
+        } catch (error) {
+            console.error('Error architecting project:', error);
+            codeOutput.textContent = `An error occurred while architecting: ${error.message}\nPlease check the browser console for more details.`;
+            showMessage('Failed to architect project.', true);
+        } finally {
+            loader.classList.add('hidden');
+            architectBtn.disabled = false;
+            architectBtn.innerHTML = '<i class="fas fa-magic mr-2"></i> Architect Project & Download';
+        }
+    }
+
+    // --- Simplified Scaffolding Logic ---
+    async function handleScaffolding() {
+        const projectName = scaffoldInput.value.trim();
+        if (!projectName) {
+            showMessage('Please enter a project name.', true);
+            return;
+        }
+
+        scaffoldBtn.disabled = true;
+        scaffoldBtn.innerHTML = '<div class="loader mr-2"></div> Scaffolding...';
+
+        outputContainer.classList.remove('hidden');
+        outputTitle.textContent = `Scaffolding '${projectName}'`;
+        codeOutput.textContent = 'Preparing project files...';
+        loader.classList.remove('hidden');
+        copyBtn.classList.add('hidden');
+        messageBox.classList.add('hidden');
+
+        try {
+            const zip = new JSZip();
+
+            // --- Define boilerplate file content ---
+            const gitignoreContent = `# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+`;
+
+            const requirementsContent = `# Add your dependencies here, e.g.,
+# requests
+# numpy
+`;
+            const setupBatContent = `@echo off
+echo ===================================
+echo   Setting up the Python environment for ${projectName}
+echo ===================================
+
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Python is not found. Please install Python 3 and add it to your PATH.
+    pause
+    exit /b 1
+)
+
+echo Creating virtual environment in '.\\venv\\'...
+python -m venv venv
+if %errorlevel% neq 0 (
+    echo Failed to create virtual environment.
+    pause
+    exit /b 1
+)
+
+echo Activating environment and installing dependencies from requirements.txt...
+call .\\venv\\Scripts\\activate.bat
+pip install -r requirements.txt
+if %errorlevel% neq 0 (
+    echo Failed to install dependencies.
+    pause
+    exit /b 1
+)
+
+echo.
+echo ===================================
+echo   Setup Complete!
+echo ===================================
+echo You can now run the project using the 'run.bat' script after creating a 'main.py' file.
+echo.
+pause
+`;
+            const runBatContent = `@echo off
+echo ===================================
+echo   Running ${projectName}
+echo ===================================
+
+if not exist ".\\venv\\Scripts\\activate.bat" (
+    echo Virtual environment not found. Please run 'setup.bat' first.
+    pause
+    exit /b 1
+)
+
+call .\\venv\\Scripts\\activate.bat
+python main.py
+
+echo.
+echo ===================================
+echo   Script finished. Press any key to exit.
+echo ===================================
+pause >nul
+`;
+
+            const readmeContent = `# ${projectName}
+
+Project scaffolding generated by the Harmonic Project Architect (HPA).
+
+## Getting Started (Windows)
+
+1.  **Run \`setup.bat\`**: Double-click to create a virtual environment and install dependencies.
+2.  **Create your code**: Write your main application logic in a file named \`main.py\`.
+3.  **Run \`run.bat\`**: Double-click to activate the environment and execute your \`main.py\` file.`;
+
+            zip.file("README.md", readmeContent);
+            zip.file(".gitignore", gitignoreContent);
+            zip.file("requirements.txt", requirementsContent);
+            zip.file("setup.bat", setupBatContent);
+            zip.file("run.bat", runBatContent);
+
+            codeOutput.textContent += '\nGenerating zip file, your download will begin shortly...';
+            const content = await zip.generateAsync({ type: "blob" });
+
+            saveAs(content, `${projectName}_scaffold.zip`);
+
+            showMessage(`'${projectName}_scaffold.zip' download started.`);
+            codeOutput.textContent += `\nBasic scaffolding project '${projectName}_scaffold.zip' has been successfully generated.`;
+
+        } catch (error) {
+            console.error('Error scaffolding project:', error);
+            codeOutput.textContent = `An error occurred while scaffolding: ${error.message}`;
+            showMessage('Failed to create project zip.', true);
+        } finally {
+            loader.classList.add('hidden');
+            scaffoldBtn.disabled = false;
+            scaffoldBtn.innerHTML = '<i class="fas fa-download mr-2"></i> Download Scaffolding';
+        }
+    }
+
+    // --- Context-Aware File Analysis Logic ---
+    async function handleFileAnalysis() {
+        const userPrompt = fileAnalysisPromptInput.value.trim();
+        if (!selectedFile) {
+            showMessage('Please select a file first.', true);
+            return;
+        }
+        if (!fileIsReady) {
+            showMessage('File is still being loaded, please wait a moment.', true);
+            return;
+        }
+
+        analyzeFileBtn.disabled = true;
+        analyzeFileBtn.innerHTML = '<div class="loader mr-2"></div> Analyzing...';
+        outputContainer.classList.remove('hidden');
+        outputTitle.textContent = 'File Analysis Result';
+        codeOutput.textContent = '';
+        loader.classList.remove('hidden');
+        copyBtn.classList.add('hidden');
+        messageBox.classList.add('hidden');
+
+        let promptParts = [];
+        const fileContentPart = isImageFile ? {
+            inlineData: {
+                mimeType: selectedFileMimeType,
+                data: selectedFileContent.split(',')[1] // Extract base64 part
+            }
+        } : { text: `\n\n--- File Content (${selectedFile.name}) ---\n${selectedFileContent}\n--- End File Content ---` };
+
+        // The core, contextual prompt for analysis
+        let contextualPrompt = `You are the Harmonic Project Architect (HPA). You have been provided with a file and a user query. Your expertise is in Harmonic Algebra (HA), as defined by the provided documents. Your goal is to analyze the file and answer the user's query using this advanced, contextual knowledge. Focus on how the file's content relates to concepts like 'information-theoretic harmonic algebra', 'safety-preserving operators', 'HCS integration', 'multi-dimensional harmonic embeddings', or other relevant principles. If the query is general, provide a detailed, high-level overview from this perspective.
+
+# Harmonic Algebra Context:
+${AGI_CONTEXT}
+
+# User Query:
+${userPrompt || 'Analyze and summarize the provided file.'}
+
+# File to Analyze:
+`;
+        promptParts.push({ text: contextualPrompt });
+        promptParts.push(fileContentPart);
+
+        const payload = { contents: [{ role: "user", parts: promptParts }] };
+
+        try {
+            const result = await callGeminiAPI(payload, 'gemini-2.5-flash-preview-05-20');
+
+            if (result.candidates && result.candidates.length > 0 &&
+                 result.candidates[0].content && result.candidates[0].content.parts &&
+                 result.candidates[0].content.parts.length > 0 && result.candidates[0].content.parts[0].text) {
+
+                codeOutput.textContent = result.candidates[0].content.parts[0].text.trim();
+            } else {
+                throw new Error('No valid analysis content received from API. Response structure unexpected.');
+            }
+        } catch (error) {
+            console.error('Error analyzing file:', error);
+            codeOutput.textContent = `An error occurred during file analysis: ${error.message}\nPlease check the browser console for more details.`;
+            showMessage('Failed to analyze file.', true);
+        } finally {
+            loader.classList.add('hidden');
+            copyBtn.classList.remove('hidden');
+            analyzeFileBtn.disabled = false;
+            analyzeFileBtn.innerHTML = '<i class="fas fa-search mr-2"></i> Analyze File';
+        }
+    }
+
+    // --- File Upload Event Listener ---
+    fileUploadInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            selectedFile = file;
+            selectedFileMimeType = file.type || 'application/octet-stream';
+            fileNameDisplay.textContent = `File: ${file.name}`;
+            fileIsReady = false;
+
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                selectedFileContent = e.target.result;
+                fileIsReady = true;
+                if (isImageFile) {
+                    imagePreview.src = e.target.result;
+                    imagePreview.classList.remove('hidden');
+                    fileNameDisplay.classList.add('hidden');
+                } else {
+                    imagePreview.classList.add('hidden');
+                    fileNameDisplay.classList.remove('hidden');
+                }
+            };
+
+            isImageFile = selectedFileMimeType.startsWith('image/');
+            imagePreviewContainer.classList.remove('hidden');
+
+            if (isImageFile) {
+                reader.readAsDataURL(file);
+            } else {
+                reader.readAsText(file);
+            }
+        } else {
+            selectedFile = null;
+            selectedFileContent = null;
+            selectedFileMimeType = null;
+            isImageFile = false;
+            fileIsReady = false;
+            imagePreviewContainer.classList.add('hidden');
+            imagePreview.src = '#';
+            fileNameDisplay.textContent = '';
+        }
+    });
+
+    function handleCopy() {
+        const textToCopy = codeOutput.textContent;
+        // Use modern clipboard API if available and in a secure context
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(textToCopy)
+                .then(() => showMessage('Copied to clipboard!'))
+                .catch(() => showMessage('Failed to copy.', true));
+        } else {
+            // Fallback for older browsers or insecure contexts
+            const textArea = document.createElement('textarea');
+            textArea.value = textToCopy;
+            textArea.style.position = 'absolute';
+            textArea.style.left = '-9999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showMessage('Copied to clipboard!');
+            } catch (err) {
+                console.error('Fallback copy failed', err);
+                showMessage('Failed to copy.', true);
+            }
+            document.body.removeChild(textArea);
+        }
+    }
+
+    // --- Event Listeners ---
+    architectBtn.addEventListener('click', handleProjectArchitecture);
+    scaffoldBtn.addEventListener('click', handleScaffolding);
+    analyzeFileBtn.addEventListener('click', handleFileAnalysis);
+    copyBtn.addEventListener('click', handleCopy);
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,768 @@
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+} from 'react';
+import {
+  getAuth,
+  signInWithCustomToken,
+  signInAnonymously,
+  onAuthStateChanged
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  onSnapshot,
+  collection,
+  query,
+  where,
+  addDoc,
+  serverTimestamp,
+  getDocs,
+} from 'firebase/firestore';
+import {
+  initializeApp
+} from 'firebase/app';
+
+// Global styles using Tailwind CSS
+const tailwindStyles = `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  body {
+    font-family: 'Inter', sans-serif;
+  }
+`;
+
+// Helper for Firebase initialization
+const firebaseConfig = JSON.parse(
+  typeof __firebase_config !== 'undefined' ?
+  __firebase_config :
+  '{}',
+);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// Contexts
+const AuthContext = createContext(null);
+const ConversationContext = createContext(null);
+const SpeechContext = createContext(null);
+const SettingsContext = createContext(null);
+
+// Error boundary to catch rendering errors
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      hasError: false
+    };
+  }
+
+  static getDerivedStateFromError(error) {
+    return {
+      hasError: true
+    };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error: ", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white p-4">
+          <h1 className="text-2xl font-bold mb-4">Something went wrong.</h1>
+          <p className="text-gray-400">Please try refreshing the page.</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+
+// Auth Provider
+const AuthProvider = ({
+  children
+}) => {
+  const [user, setUser] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  useEffect(() => {
+    const signIn = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined') {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Firebase Auth Error:", error);
+      }
+    };
+    signIn();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  return (
+    <AuthContext.Provider value = {
+      {
+        user,
+        isAuthReady
+      }
+    } > {
+      children
+    } </AuthContext.Provider>
+  );
+};
+
+// Conversation Provider
+const ConversationProvider = ({
+  children
+}) => {
+  const {
+    user,
+    isAuthReady
+  } = useContext(AuthContext);
+  const [conversations, setConversations] = useState([]);
+  const [currentConversation, setCurrentConversation] = useState(null);
+  const [messages, setMessages] = useState([]);
+
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+
+    const conversationsRef = collection(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      user.uid,
+      'conversations'
+    );
+    const q = query(conversationsRef);
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const convos = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setConversations(convos);
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady]);
+
+  useEffect(() => {
+    if (!isAuthReady || !user || !currentConversation) return;
+
+    const messagesRef = collection(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      user.uid,
+      'conversations',
+      currentConversation.id,
+      'messages'
+    );
+    const q = query(messagesRef);
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady, currentConversation]);
+
+  const createNewConversation = async (prompt) => {
+    if (!user) return;
+    try {
+      const newDocRef = doc(
+        collection(db, 'artifacts', appId, 'users', user.uid, 'conversations')
+      );
+      const newConversation = {
+        title: prompt.substring(0, 30) + '...',
+        createdAt: serverTimestamp(),
+      };
+      await setDoc(newDocRef, newConversation);
+      setCurrentConversation({
+        id: newDocRef.id,
+        ...newConversation
+      });
+      await addMessage(newDocRef.id, 'user', prompt);
+    } catch (error) {
+      console.error('Error creating new conversation:', error);
+    }
+  };
+
+  const addMessage = async (conversationId, role, content) => {
+    if (!user) return;
+    try {
+      const messagesRef = collection(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        user.uid,
+        'conversations',
+        conversationId,
+        'messages'
+      );
+      await addDoc(messagesRef, {
+        role,
+        content,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error('Error adding message:', error);
+    }
+  };
+
+  const clearConversation = async () => {
+    setCurrentConversation(null);
+    setMessages([]);
+  };
+
+  return (
+    <ConversationContext.Provider
+      value = {
+        {
+          conversations,
+          currentConversation,
+          setCurrentConversation,
+          messages,
+          createNewConversation,
+          addMessage,
+          clearConversation,
+        }
+      }
+    > {
+      children
+    } </ConversationContext.Provider>
+  );
+};
+
+// Settings Provider
+const SettingsProvider = ({
+  children
+}) => {
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [model, setModel] = useState('Gemini 1.5 Flash');
+  const [specialist, setSpecialist] = useState(null);
+
+  const toggleDarkMode = () => setIsDarkMode((prev) => !prev);
+
+  return (
+    <SettingsContext.Provider
+      value = {
+        {
+          isDarkMode,
+          toggleDarkMode,
+          model,
+          setModel,
+          specialist,
+          setSpecialist,
+        }
+      }
+    > {
+      children
+    } </SettingsContext.Provider>
+  );
+};
+
+
+// Speech Provider (stubbed out for now)
+const SpeechProvider = ({
+  children
+}) => {
+  const [isListening, setIsListening] = useState(false);
+  const [text, setText] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const startListening = () => setIsListening(true);
+  const stopListening = () => setIsListening(false);
+  const speak = (content) => setIsSpeaking(true);
+
+  return (
+    <SpeechContext.Provider
+      value = {
+        {
+          isListening,
+          startListening,
+          stopListening,
+          isSpeaking,
+          speak,
+          text,
+          setText
+        }
+      }
+    > {
+      children
+    } </SpeechContext.Provider>
+  );
+};
+
+// Components
+const Sidebar = () => {
+  const {
+    conversations,
+    setCurrentConversation,
+    createNewConversation
+  } =
+  useContext(ConversationContext);
+  const {
+    isDarkMode,
+    toggleDarkMode
+  } = useContext(SettingsContext);
+
+  const handleNewChat = () => {
+    createNewConversation("New Chat");
+  };
+
+  return (
+    <div
+      className = {
+        `w-64 flex flex-col p-4 shadow-xl ${
+          isDarkMode ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-800'
+        } transition-colors duration-300`
+      }
+    >
+      <div className="flex-1 overflow-y-auto">
+        <h2 className="text-xl font-bold mb-4">Chats</h2>
+        <button
+          onClick = {
+            handleNewChat
+          }
+          className = {
+            `w-full p-2 mb-4 rounded-md font-semibold transition-colors duration-300 ${
+              isDarkMode ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-indigo-500 hover:bg-indigo-600'
+            }`
+          }
+        >
+          New Chat
+        </button>
+        <ul>
+          {conversations.map((convo) => (
+            <li
+              key = {
+                convo.id
+              }
+              onClick = {
+                () => setCurrentConversation(convo)
+              }
+              className = {
+                `p-2 rounded-md cursor-pointer mb-2 transition-colors duration-200 truncate ${
+                  isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'
+                }`
+              }
+            >
+              {convo.title}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-auto pt-4 border-t border-gray-700">
+        <button
+          onClick = {
+            toggleDarkMode
+          }
+          className = "w-full p-2 rounded-md text-sm transition-colors duration-300 bg-gray-700 hover:bg-gray-600"
+        >
+          {isDarkMode ? 'Light Mode' : 'Dark Mode'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const ChatWindow = () => {
+  const {
+    messages,
+    addMessage,
+    currentConversation
+  } = useContext(ConversationContext);
+  const {
+    isDarkMode
+  } = useContext(SettingsContext);
+  const [input, setInput] = useState('');
+
+  const handleSend = () => {
+    if (input.trim() && currentConversation) {
+      addMessage(currentConversation.id, 'user', input);
+      setInput('');
+      // Simulate a specialist response
+      setTimeout(() => {
+        addMessage(currentConversation.id, 'specialist', `I received your message: "${input}". How can I help you further?`);
+      }, 1000);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      handleSend();
+    }
+  };
+
+  return (
+    <div
+      className = {
+        `flex-1 flex flex-col p-4 transition-colors duration-300 ${
+          isDarkMode ? 'bg-gray-900 text-gray-200' : 'bg-gray-100 text-gray-800'
+        }`
+      }
+    >
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
+            <h1 className="text-xl">Start a new chat or select a conversation.</h1>
+          </div>
+        ) : (
+          messages.map((msg, index) => (
+            <div
+              key = {
+                msg.id
+              }
+              className = {
+                `p-3 rounded-xl max-w-lg ${
+                  msg.role === 'user'
+                    ? 'bg-blue-600 text-white ml-auto rounded-br-none'
+                    : 'bg-gray-700 text-white rounded-bl-none'
+                }`
+              }
+            >
+              {msg.content}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="flex p-4 border-t border-gray-700">
+        <input
+          type = "text"
+          value = {
+            input
+          }
+          onChange = {
+            (e) => setInput(e.target.value)
+          }
+          onKeyDown = {
+            handleKeyDown
+          }
+          placeholder = "Type your message..."
+          className = {
+            `flex-1 p-3 rounded-full outline-none transition-colors duration-300 ${
+              isDarkMode
+                ? 'bg-gray-700 text-white placeholder-gray-400'
+                : 'bg-white text-gray-800 placeholder-gray-500'
+            }`
+          }
+        />
+        <button
+          onClick = {
+            handleSend
+          }
+          className = {
+            `ml-2 p-3 rounded-full transition-colors duration-300 ${
+              isDarkMode
+                ? 'bg-indigo-600 hover:bg-indigo-700'
+                : 'bg-indigo-500 hover:bg-indigo-600'
+            }`
+          }
+        >
+          <svg
+            xmlns = "http://www.w3.org/2000/svg"
+            viewBox = "0 0 24 24"
+            fill = "currentColor"
+            className = "w-6 h-6 text-white"
+          >
+            <path d = "M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 28.534 28.534 0 007.447-2.607l.865-.327 5.927 5.927a.75.75 0 001.06-1.06l-5.927-5.927.327-.865c1.942-1.996 3.397-4.225 4.397-6.916a.75.75 0 00-.94-.926L2.405 3.478z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const SpecialistCard = ({
+  specialist,
+  onSelect
+}) => {
+  const {
+    isDarkMode
+  } = useContext(SettingsContext);
+  return (
+    <div
+      className = {
+        `cursor-pointer p-4 border rounded-xl flex flex-col items-center transition-transform transform hover:scale-105 duration-300 ${
+          isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'
+        }`
+      }
+      onClick = {
+        () => onSelect(specialist)
+      }
+    >
+      <div className="w-16 h-16 rounded-full overflow-hidden mb-2">
+        <img
+          src = {
+            specialist.image || `https://placehold.co/64x64/22c55e/ffffff?text=${specialist.name.charAt(0)}`
+          }
+          alt = {
+            specialist.name
+          }
+          className = "w-full h-full object-cover"
+        />
+      </div>
+      <h3 className="font-bold text-lg">{specialist.name}</h3>
+      <p className="text-sm text-gray-400 text-center">{specialist.field}</p>
+    </div>
+  );
+};
+
+const specialistData = [{
+  id: 1,
+  name: 'Aiden',
+  field: 'Health & Wellness',
+  image: 'https://placehold.co/64x64/ef4444/ffffff?text=A'
+}, {
+  id: 2,
+  name: 'Mia',
+  field: 'Creative Writing',
+  image: 'https://placehold.co/64x64/3b82f6/ffffff?text=M'
+}, {
+  id: 3,
+  name: 'Dr. Evelyn',
+  field: 'Scientific Research',
+  image: 'https://placehold.co/64x64/60a5fa/ffffff?text=E'
+}, {
+  id: 4,
+  name: 'Leo',
+  field: 'Computer Science',
+  image: 'https://placehold.co/64x64/10b981/ffffff?text=L'
+}, ];
+
+const SpecialistPanel = () => {
+  const {
+    isDarkMode,
+    setSpecialist
+  } = useContext(SettingsContext);
+  const {
+    clearConversation
+  } = useContext(ConversationContext);
+  const {
+    speak
+  } = useContext(SpeechContext);
+
+  const handleSelectSpecialist = (specialist) => {
+    setSpecialist(specialist);
+    clearConversation();
+    speak(`You have selected ${specialist.name}. How can I help you today?`);
+  };
+
+  return (
+    <div
+      className = {
+        `p-8 flex flex-col items-center justify-center h-full transition-colors duration-300 ${
+          isDarkMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'
+        }`
+      }
+    >
+      <h2 className="text-3xl font-bold mb-6">Choose your Specialist</h2>
+      <p className="text-gray-400 mb-8 text-center max-w-2xl">
+        Select a specialist to begin your conversation. Each specialist is an expert in their respective field and is ready to assist you.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-5xl">
+        {specialistData.map((spec) => (
+          <SpecialistCard
+            key = {
+              spec.id
+            }
+            specialist = {
+              spec
+            }
+            onSelect = {
+              handleSelectSpecialist
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+
+const InquiryModule = ({
+  inquiry,
+  onSelect
+}) => {
+  const {
+    isDarkMode
+  } = useContext(SettingsContext);
+  return (
+    <div
+      className = {
+        `cursor-pointer p-6 rounded-xl border transition-all duration-300 hover:scale-105 ${
+          isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'
+        }`
+      }
+      onClick = {
+        () => onSelect(inquiry)
+      }
+    >
+      <h3 className="font-semibold text-lg mb-2">
+        {inquiry.title}
+      </h3>
+      <p className="text-sm text-gray-400">
+        {inquiry.description}
+      </p>
+    </div>
+  );
+};
+
+const inquiryData = [{
+  id: 1,
+  title: 'Solve a Problem',
+  description: 'Provide a problem and a specialist will help you find a solution.'
+}, {
+  id: 2,
+  title: 'Generate Content',
+  description: 'Generate stories, poems, code, or any other creative content.'
+}, {
+  id: 3,
+  title: 'Explain a Concept',
+  description: 'Get a clear explanation for any complex topic.'
+}, {
+  id: 4,
+  title: 'Answer a Question',
+  description: 'Ask a question and receive a detailed, accurate answer.'
+}, ];
+
+const InquiryPanel = ({
+  onSelect
+}) => {
+  const {
+    isDarkMode
+  } = useContext(SettingsContext);
+  return (
+    <div
+      className = {
+        `p-8 flex flex-col items-center justify-center h-full transition-colors duration-300 ${
+          isDarkMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'
+        }`
+      }
+    >
+      <h2 className="text-3xl font-bold mb-6">What would you like to do?</h2>
+      <p className="text-gray-400 mb-8 text-center max-w-2xl">
+        Choose from one of the following prompts to start your inquiry with the specialist you selected.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-5xl">
+        {inquiryData.map((inquiry) => (
+          <InquiryModule
+            key = {
+              inquiry.id
+            }
+            inquiry = {
+              inquiry
+            }
+            onSelect = {
+              onSelect
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const MainPanel = () => {
+  const {
+    specialist
+  } = useContext(SettingsContext);
+  const {
+    createNewConversation
+  } = useContext(ConversationContext);
+  const {
+    isDarkMode
+  } = useContext(SettingsContext);
+
+  const handleInquirySelect = (inquiry) => {
+    // This now passes the inquiry title directly to createNewConversation
+    createNewConversation(`${specialist.field} - ${inquiry.title}`);
+  };
+
+  if (!specialist) {
+    return <SpecialistPanel />;
+  }
+
+  return (
+    <div
+      className = {
+        `flex-1 flex flex-col transition-colors duration-300 ${
+          isDarkMode ? 'bg-gray-900' : 'bg-gray-100'
+        }`
+      }
+    >
+      <InquiryPanel onSelect = {
+        handleInquirySelect
+      } />
+    </div>
+  );
+};
+
+// Main App Component
+const App = () => {
+  const {
+    specialist
+  } = useContext(SettingsContext);
+
+  return (
+    <div
+      className = "flex h-screen bg-gray-900 text-white"
+    >
+      {specialist && <Sidebar />}
+      <MainPanel />
+      {specialist && <ChatWindow />}
+    </div>
+  );
+};
+
+
+// Root component with providers
+const Root = () => (
+  <ErrorBoundary>
+    <AuthProvider>
+      <ConversationProvider>
+        <SettingsProvider>
+          <SpeechProvider>
+            <App />
+          </SpeechProvider>
+        </SettingsProvider>
+      </ConversationProvider>
+    </AuthProvider>
+  </ErrorBoundary>
+);
+
+window.onload = function() {
+  const styleSheet = document.createElement("style");
+  styleSheet.type = "text/css";
+  styleSheet.innerText = tailwindStyles;
+  document.head.appendChild(styleSheet);
+  const rootElement = document.getElementById('root');
+  if (rootElement) {
+    const root = ReactDOM.createRoot(rootElement);
+    root.render( < Root / > );
+  }
+};

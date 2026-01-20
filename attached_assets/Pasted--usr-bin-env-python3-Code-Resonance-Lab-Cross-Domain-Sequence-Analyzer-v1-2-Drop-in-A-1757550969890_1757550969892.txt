@@ -1,0 +1,775 @@
+#!/usr/bin/env python3
+"""
+Code Resonance Lab — Cross-Domain Sequence Analyzer (v1.2)
+
+Drop in ANY symbolic codes (WOW! 6EQUJ5, Voynich-like glyph streams, DNA strings,
+QR payloads, product SKUs, etc.) and get:
+
+ • Multi-encoding numeric views (base36, ASCII, ordinal buckets, custom maps)
+ • Rich single-sequence analytics (entropy, n-grams, FFT periodicities, autocorr)
+ • Pairwise/comparative analytics (cross-corr, mutual info, edit distance, motif overlap)
+ • Prime/attractor overlays + limit-cycle heuristics (state-inertia style)
+ • Actionable design suggestions (+ residue-class histograms & Kasiski repeats)
+ • Optional significance testing for cross-corr / MI (permutation p-values)
+
+Zero external deps beyond the Python stdlib and numpy.
+
+WHAT'S NEW IN v1.2
+------------------
+• FFT: Hann window + parabolic peak interpolation → sharper dominant period.
+• Compression: zlib + stdlib lzma ratios; CRC32 tag per sequence.
+• Residue-Class Histograms: auto-fold on detected period (or via --residue W).
+• Kasiski Repeat Finder: n=3..5 repeated n-grams + distance/GCD period votes.
+• Optional permutation tests (--sig N) for pairwise metrics.
+• CLI polish: --bins, --residue, --kasiski, --sig; clearer tests.
+
+USAGE
+-----
+# Basic text report
+python resonance_lab_v1_2.py --codes 6EQUJ5 "chororqokedy"
+
+# JSON with extras
+python resonance_lab_v1_2.py --codes 6EQUJ5 665236 --report json --prime --bins 24 --kasiski --residue auto
+
+# Significance testing with 200 permutations (heavier)
+python resonance_lab_v1_2.py --codes 6EQUJ5 665236 --sig 200 --report text
+
+SAFETY/PRIVACY
+--------------
+No network access. Reads local args/files and writes local output only.
+"""
+from __future__ import annotations
+import argparse
+import json
+import math
+import os
+import re
+import zlib
+import lzma
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Iterable, Optional, Any
+
+try:
+    import numpy as np
+except Exception:
+    raise SystemExit("[fatal] numpy is required. pip install numpy")
+
+# -----------------------------
+# Encoding / Normalization
+# -----------------------------
+_BASE36_ALPH = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_BASE36 = {ch: i for i, ch in enumerate(_BASE36_ALPH)}
+
+# Accept wide unicode; bucket non-alnum by sentinel outside 0..35
+_NONALNUM_BUCKET = 37  # bucket index for base36 view (sentinel)
+
+
+def normalize_code(s: str) -> str:
+    """Trim, collapse whitespace, preserve case; spaces collapsed to single."""
+    return re.sub(r"\s+", " ", s.strip())
+
+
+def encode_views(s: str, custom_map: Optional[Dict[str, int]] = None) -> Dict[str, List[int]]:
+    """Generate multiple numeric views of the string.
+    Views:
+      - base36: A/Z→10..35, digits 0..9; other chars → bucket 37
+      - ascii: ord(c) in [0, 255] (clipped)
+      - ordinal: rank of symbol in first-appearance order (case-sensitive)
+      - custom: user-provided mapping for symbols (fallback to 0)
+    """
+    base36: List[int] = []
+    ascii_: List[int] = []
+    ordinal: List[int] = []
+    seen: Dict[str, int] = {}
+    for ch in s:
+        uch = ch.upper()
+        base36.append(_BASE36.get(uch, _NONALNUM_BUCKET))
+        ascii_.append(min(255, max(0, ord(ch))))
+        if ch not in seen:
+            seen[ch] = len(seen)
+        ordinal.append(seen[ch])
+    views = {"base36": base36, "ascii": ascii_, "ordinal": ordinal}
+    if custom_map:
+        views["custom"] = [int(custom_map.get(ch, 0)) for ch in s]
+    return views
+
+# -----------------------------
+# Single sequence analytics
+# -----------------------------
+
+@dataclass
+class SeqStats:
+    length: int
+    unique: int
+    entropy_bits: float  # extensive
+    entropy_bits_per_symbol: float  # intensive
+    compress_ratio_zlib: float
+    compress_ratio_lzma: float
+    crc32: int
+    ngram_top: Dict[str, List[Tuple[str, int]]]
+    fft_periods: Dict[str, Optional[float]]
+    autocorr_peaks: Dict[str, List[Tuple[int, float]]]
+
+
+def _shannon_entropy_per_symbol(xs: Iterable[int], base: float = 2.0) -> float:
+    arr = list(xs)
+    if not arr:
+        return 0.0
+    total = len(arr)
+    counts = Counter(arr)
+    H = 0.0
+    for c in counts.values():
+        p = c / total
+        if p > 0:
+            H -= p * math.log(p, base)
+    return H
+
+
+def _comp_ratio_zlib(raw: bytes) -> float:
+    if not raw:
+        return 1.0
+    comp = zlib.compress(raw, level=9)
+    return len(comp) / max(1, len(raw))
+
+
+def _comp_ratio_lzma(raw: bytes) -> float:
+    if not raw:
+        return 1.0
+    comp = lzma.compress(raw, preset=6)
+    return len(comp) / max(1, len(raw))
+
+
+def _crc32(raw: bytes) -> int:
+    return zlib.crc32(raw) & 0xFFFFFFFF
+
+
+def ngrams(s: str, n: int) -> Counter:
+    return Counter([s[i:i + n] for i in range(0, max(0, len(s) - n + 1))])
+
+
+def topk(counter: Counter, k: int = 5) -> List[Tuple[str, int]]:
+    return counter.most_common(k)
+
+
+def _parabolic_refine(mag: np.ndarray, k: int) -> float:
+    """Parabolic peak interpolation around bin k → refined (float) index."""
+    if k <= 0 or k >= len(mag) - 1:
+        return float(k)
+    a, b, c = mag[k - 1], mag[k], mag[k + 1]
+    denom = (a - 2 * b + c)
+    if denom == 0:
+        return float(k)
+    delta = 0.5 * (a - c) / denom
+    if delta < -0.5:
+        delta = -0.5
+    if delta > 0.5:
+        delta = 0.5
+    return float(k) + float(delta)
+
+
+def _dominant_period(arr: List[int], pad_pow2: bool = True) -> Optional[float]:
+    if not arr:
+        return None
+    x = np.asarray(arr, dtype=float)
+    x = x - float(np.mean(x))
+    n = len(x)
+    n2 = 1 << (n - 1).bit_length() if pad_pow2 else n
+    # Hann window to reduce leakage
+    w = np.hanning(min(n, n2))
+    xw = np.zeros(n2, dtype=float)
+    xw[:n] = x * (w if len(w) == n else 1.0)
+    X = np.fft.rfft(xw, n=n2)
+    mag = np.abs(X)
+    if mag.size <= 1:
+        return None
+    mag[0] = 0.0  # ignore DC
+    k = int(np.argmax(mag))
+    k_ref = _parabolic_refine(mag, k)
+    if k_ref <= 0:
+        return None
+    return float(n2) / float(k_ref)
+
+
+def _autocorr(arr: List[int]) -> np.ndarray:
+    if not arr:
+        return np.zeros(0)
+    x = np.asarray(arr, dtype=float)
+    x = x - np.mean(x)
+    if np.allclose(x, 0):
+        return np.zeros_like(x)
+    c = np.correlate(x, x, mode='full')
+    mid = len(c) // 2
+    res = c[mid:]
+    if res[0] != 0:
+        res = res / res[0]
+    return res
+
+
+def _autocorr_peaks(ac: np.ndarray, k: int = 3) -> List[Tuple[int, float]]:
+    peaks: List[Tuple[int, float]] = []
+    for i in range(1, len(ac) - 1):
+        if ac[i] > ac[i - 1] and ac[i] > ac[i + 1]:
+            peaks.append((i, float(ac[i])))
+    peaks.sort(key=lambda t: t[1], reverse=True)
+    return peaks[:k]
+
+
+def analyze_single(code: str, views: Dict[str, List[int]]) -> SeqStats:
+    L = len(code)
+    uniq = len(set(code))
+    ent_per = _shannon_entropy_per_symbol(views["ordinal"])  # per symbol
+    ent = ent_per * L
+    raw = code.encode("utf-8", "ignore")
+    cr_z = _comp_ratio_zlib(raw)
+    cr_l = _comp_ratio_lzma(raw)
+    crc = _crc32(raw)
+    fft_periods = {name: _dominant_period(arr) for name, arr in views.items()}
+    autocorr_peaks = {name: _autocorr_peaks(_autocorr(arr)) for name, arr in views.items()}
+    ngram_top = {
+        "unigram": topk(ngrams(code, 1), 8),
+        "bigram": topk(ngrams(code, 2), 8),
+        "trigram": topk(ngrams(code, 3), 8),
+    }
+    return SeqStats(L, uniq, ent, ent_per, cr_z, cr_l, crc, ngram_top, fft_periods, autocorr_peaks)
+
+# -----------------------------
+# Residue-class histograms & Kasiski repeats
+# -----------------------------
+
+def residue_class_histogram(code: str, period: int, top_k: int = 5) -> List[Dict[str, int]]:
+    """Return list of length `period`, each an ordered dict of top_k symbol counts for that residue."""
+    period = max(1, int(period))
+    cols: List[Counter] = [Counter() for _ in range(period)]
+    for i, ch in enumerate(code):
+        cols[i % period][ch] += 1
+    out: List[Dict[str, int]] = []
+    for c in cols:
+        out.append(dict(c.most_common(top_k)))
+    return out
+
+
+def kasiski_repeats(code: str, n_min: int = 3, n_max: int = 5, max_hits: int = 200) -> Dict[str, Any]:
+    """Find repeated n-grams and the distances between occurrences. Return candidate periods via GCD voting."""
+    L = len(code)
+    repeats: Dict[str, List[int]] = {}
+    for n in range(n_min, n_max + 1):
+        pos: Dict[str, List[int]] = defaultdict(list)
+        for i in range(0, L - n + 1):
+            g = code[i:i + n]
+            pos[g].append(i)
+        for g, idxs in pos.items():
+            if len(idxs) >= 2:
+                dists = [idxs[j + 1] - idxs[j] for j in range(len(idxs) - 1)]
+                repeats[g] = dists[:]
+    # votes for periods via pairwise gcd
+    votes: Counter = Counter()
+    for dlist in repeats.values():
+        for i in range(len(dlist)):
+            for j in range(i + 1, len(dlist)):
+                g = math.gcd(dlist[i], dlist[j])
+                if g > 1:
+                    votes[g] += 1
+    top_periods = votes.most_common(10)
+    # trim repeats to avoid huge payload
+    trimmed = {k: v[:10] for k, v in list(repeats.items())[:max_hits]}
+    return {"period_votes": top_periods, "repeats": trimmed}
+
+# -----------------------------
+# Pairwise / comparative analytics
+# -----------------------------
+
+def cross_correlation(a: List[int], b: List[int]) -> float:
+    if not a or not b:
+        return 0.0
+    x = np.array(a, dtype=float)
+    y = np.array(b, dtype=float)
+    n = min(len(x), len(y))
+    x = x[:n] - np.mean(x[:n])
+    y = y[:n] - np.mean(y[:n])
+    denom = (np.linalg.norm(x) * np.linalg.norm(y))
+    if denom == 0:
+        return 0.0
+    return float(np.dot(x, y) / denom)
+
+
+def mutual_information_discrete(a: List[int], b: List[int], bins: int = 16) -> float:
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    xa = np.asarray(a[:n], dtype=float)
+    xb = np.asarray(b[:n], dtype=float)
+
+    def q(v: np.ndarray) -> np.ndarray:
+        if v.size == 0:
+            return v
+        lo, hi = float(np.min(v)), float(np.max(v))
+        if hi == lo:
+            return np.zeros_like(v, dtype=int)
+        idx = np.floor((v - lo) / (hi - lo + 1e-12) * bins).astype(int)
+        return np.clip(idx, 0, bins - 1)
+
+    qa, qb = q(xa), q(xb)
+    joint = np.zeros((bins, bins), dtype=float)
+    for i in range(n):
+        joint[qa[i], qb[i]] += 1.0
+    joint /= n
+    pa = joint.sum(axis=1, keepdims=True) + 1e-12
+    pb = joint.sum(axis=0, keepdims=True) + 1e-12
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio = joint / (pa @ pb)
+        mask = joint > 0
+        mi = float(np.sum(joint[mask] * np.log2(ratio[mask] + 1e-12)))
+    return mi
+
+
+def perm_test_cross_mi(a: List[int], b: List[int], *, bins: int, perms: int, rng: np.random.Generator) -> Tuple[float, float]:
+    """Return (p_cross, p_mi) by shuffling b `perms` times; small perms keep it light."""
+    if perms <= 0:
+        return (1.0, 1.0)
+    obs_cross = cross_correlation(a, b)
+    obs_mi = mutual_information_discrete(a, b, bins=bins)
+    count_cross = 0
+    count_mi = 0
+    b_arr = np.array(b, dtype=float)
+    for _ in range(perms):
+        rng.shuffle(b_arr)
+        cc = cross_correlation(a, b_arr.tolist())
+        mi = mutual_information_discrete(a, b_arr.tolist(), bins=bins)
+        if cc >= obs_cross:
+            count_cross += 1
+        if mi >= obs_mi:
+            count_mi += 1
+    # add 1 to numerator/denominator for a tiny bit of smoothing
+    p_cross = (count_cross + 1) / (perms + 1)
+    p_mi = (count_mi + 1) / (perms + 1)
+    return float(p_cross), float(p_mi)
+
+
+def levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if len(a) == 0:
+        return len(b)
+    if len(b) == 0:
+        return len(a)
+    dp = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev = dp[0]
+        dp[0] = i
+        for j, cb in enumerate(b, 1):
+            cur = dp[j]
+            cost = 0 if ca == cb else 1
+            dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
+            prev = cur
+    return dp[-1]
+
+
+def lcs_length(a: str, b: str) -> int:
+    n, m = len(a), len(b)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if a[i] == b[j]:
+                dp[i][j] = 1 + dp[i + 1][j + 1]
+            else:
+                dp[i][j] = max(dp[i + 1][j], dp[i][j + 1])
+    return dp[0][0]
+
+# -----------------------------
+# Prime/Attractor overlay (heuristic)
+# -----------------------------
+
+def primes_upto(N: int) -> List[int]:
+    if N < 2:
+        return []
+    sieve = np.ones(N + 1, dtype=bool)
+    sieve[:2] = False
+    for p in range(2, int(N ** 0.5) + 1):
+        if sieve[p]:
+            sieve[p * p:N + 1:p] = False
+    return [i for i, ok in enumerate(sieve) if ok]
+
+
+def twin_prime_indicator(N: int) -> np.ndarray:
+    ps = set(primes_upto(N + 2))
+    arr = np.zeros(N + 1, dtype=int)
+    for n in range(2, N - 1):
+        if n in ps and (n + 2) in ps:
+            arr[n] = 1
+    return arr
+
+
+def inertia_overlay(seq: List[int]) -> Dict[str, Any]:
+    # deterministic overlay — no external modules
+    if not seq:
+        return {"kind": "unknown"}
+    x = np.asarray(seq, dtype=float)
+    x = (x - np.mean(x)) / (np.std(x) + 1e-9)
+    N = len(x)
+    H = np.zeros(N)
+    a, b, g = 0.09, 0.01, 0.8
+    for n in range(1, N):
+        dH = a * H[n - 1] - b * (H[n - 1] ** 3) + g * x[n]
+        H[n] = H[n - 1] + dH
+    var = float(np.var(H[int(0.8 * N):])) if N >= 5 else float(np.var(H))
+    per = _dominant_period(H.tolist())
+    ent = float(_spectral_entropy(H.tolist()))
+    kind = "unknown"
+    if var < 1e-6:
+        kind = "fixed_point"
+    elif (per is not None) and var < 0.1:
+        kind = "limit_cycle"
+    elif ent > 6.0:
+        kind = "chaotic_or_broadband"
+    return {"variance": var, "period": per, "entropy_bits": ent, "kind": kind}
+
+
+def _spectral_entropy(arr: List[float]) -> float:
+    if not arr:
+        return 0.0
+    x = np.asarray(arr, dtype=float)
+    x = x - np.mean(x)
+    n = 1 << (len(x) - 1).bit_length()
+    X = np.fft.rfft(x, n=n)
+    p = np.abs(X) ** 2
+    s = float(np.sum(p))
+    if s <= 0:
+        return 0.0
+    p = p / s
+    eps = 1e-12
+    return float(-np.sum(p * np.log2(p + eps)))
+
+# -----------------------------
+# Suggestions & novel transformations
+# -----------------------------
+
+def suggestions_for(code: str, stats: SeqStats, views: Dict[str, List[int]]) -> List[str]:
+    sgs: List[str] = []
+    L = stats.length
+    # Periodicity-based
+    for name, per in stats.fft_periods.items():
+        if per and 2 <= per <= max(4, L // 2):
+            sgs.append(
+                f"{name}: strong cycle≈{per:.1f}. Try folding width={int(round(per))}; analyze residues mod {int(round(per))}."
+            )
+    # Autocorr stability / smoothness
+    for name, peaks in stats.autocorr_peaks.items():
+        if peaks and peaks[0][1] > 0.5:
+            sgs.append(
+                f"{name}: repeating motif lag {peaks[0][0]} (corr {peaks[0][1]:.2f}). Try grammar induction at that lag."
+            )
+    # Entropy & compression
+    if stats.compress_ratio_zlib > 0.9 and stats.entropy_bits_per_symbol > 2.5:
+        sgs.append("Near-random look. Try symbol remapping/base36 buckets or windowed hashing to expose structure.")
+    if stats.compress_ratio_zlib < 0.6:
+        sgs.append("Highly compressible: derive minimal grammar or run LZ factorization to extract templates.")
+    # Kin/Voynich style mappings
+    if any(abs((per or 0) - 13) < 0.5 for per in stats.fft_periods.values()):
+        sgs.append("Period≈13 detected — try a 13‑tone mapping and search cross‑folio subsequences.")
+    # Novel remix suggestions
+    if L >= 20:
+        sgs.append("Novel remix: take every 5th symbol (stride‑5); compare entropy and cross‑corr.")
+    return sgs
+
+
+def pair_suggestions(codeA: str, codeB: str, viewsA: Dict[str, List[int]], viewsB: Dict[str, List[int]], bins: int) -> List[str]:
+    sgs: List[str] = []
+    for name in set(viewsA.keys()) & set(viewsB.keys()):
+        cc = cross_correlation(viewsA[name], viewsB[name])
+        mi = mutual_information_discrete(viewsA[name], viewsB[name], bins=bins)
+        if cc > 0.6:
+            sgs.append(f"{name}: strong cross‑corr (r={cc:.2f}). Try synchronized folding + motif mining.")
+        if mi > 0.2:
+            sgs.append(f"{name}: mutual info {mi:.2f} bits — shared structure; attempt aligned n‑gram transduction.")
+    lev = levenshtein(codeA, codeB)
+    lcs = lcs_length(codeA, codeB)
+    sgs.append(f"Edit distance={lev}, LCS={lcs}. Consider diff‑guided mutation A→B or B→A.")
+    return sgs
+
+# -----------------------------
+# Runner
+# -----------------------------
+
+def analyze_codes(
+    codes: List[str],
+    *,
+    custom_map: Optional[Dict[str, int]] = None,
+    prime_overlay: bool = False,
+    bins: int = 16,
+    do_residue: Optional[str] = None,  # None | 'auto' | int as str
+    do_kasiski: bool = False,
+    sig_perms: int = 0,
+    verbose: bool = False,
+    rng_seed: int = 0,
+) -> Dict[str, Any]:
+    norm = [normalize_code(c) for c in codes]
+    views = [encode_views(s, custom_map=custom_map) for s in norm]
+    singles = [analyze_single(s, v) for s, v in zip(norm, views)]
+
+    # Optional prime-spectrum overlay (apply to base36 view)
+    overlays = []
+    if prime_overlay:
+        for v in views:
+            overlays.append(inertia_overlay(v["base36"]))
+
+    # Residue histograms / Kasiski
+    residue: Dict[int, Any] = {}
+    kasis: Dict[int, Any] = {}
+    for idx, (code, st) in enumerate(zip(norm, singles)):
+        period_for_hist = None
+        if do_residue is not None:
+            if do_residue == 'auto':
+                # prefer ordinal period if sensible, else base36
+                cand = st.fft_periods.get('ordinal') or st.fft_periods.get('base36')
+                if cand and 2 <= cand <= max(4, st.length // 2):
+                    period_for_hist = int(round(cand))
+            else:
+                try:
+                    val = int(do_residue)
+                    if val >= 2:
+                        period_for_hist = val
+                except Exception:
+                    period_for_hist = None
+        if period_for_hist:
+            residue[idx] = {
+                "period": period_for_hist,
+                "hist": residue_class_histogram(code, period_for_hist, top_k=5),
+            }
+        if do_kasiski:
+            kasis[idx] = kasiski_repeats(code, 3, 5)
+
+    # Pairwise comparisons
+    pairs: Dict[str, Any] = {}
+    rng = np.random.default_rng(rng_seed)
+    for i in range(len(norm)):
+        for j in range(i + 1, len(norm)):
+            key = f"{i}__{j}"
+            data = {
+                "compare": (i, j),
+                "by_view": {},
+                "levenshtein": levenshtein(norm[i], norm[j]),
+                "lcs": lcs_length(norm[i], norm[j]),
+            }
+            for name in views[i].keys():
+                if name in views[j]:
+                    a, b = views[i][name], views[j][name]
+                    cc = cross_correlation(a, b)
+                    mi = mutual_information_discrete(a, b, bins=bins)
+                    p_cross, p_mi = perm_test_cross_mi(a, b, bins=bins, perms=sig_perms, rng=rng)
+                    data["by_view"][name] = {
+                        "cross_corr": cc,
+                        "mutual_info_bits": mi,
+                        "p_cross": p_cross,
+                        "p_mi": p_mi,
+                    }
+            pairs[key] = data
+
+    # Suggestions
+    s_single = [suggestions_for(c, st, v) for c, st, v in zip(norm, singles, views)]
+    s_pairs: Dict[str, List[str]] = {}
+    for i in range(len(norm)):
+        for j in range(i + 1, len(norm)):
+            s_pairs[f"{i}__{j}"] = pair_suggestions(norm[i], norm[j], views[i], views[j], bins=bins)
+
+    # Assemble report dict
+    rep: Dict[str, Any] = {
+        "codes": norm,
+        "stats": [],
+        "overlays": overlays,
+        "pairs": pairs,
+        "residue": residue,
+        "kasiski": kasis,
+        "suggestions": {"single": s_single, "pairs": s_pairs},
+    }
+    for st in singles:
+        rep["stats"].append({
+            "length": st.length,
+            "unique": st.unique,
+            "crc32": st.crc32,
+            "entropy_bits": st.entropy_bits,
+            "entropy_bits_per_symbol": st.entropy_bits_per_symbol,
+            "compress_ratio_zlib": st.compress_ratio_zlib,
+            "compress_ratio_lzma": st.compress_ratio_lzma,
+            "ngram_top": st.ngram_top,
+            "fft_periods": st.fft_periods,
+            "autocorr_peaks": st.autocorr_peaks,
+        })
+    return rep
+
+
+def format_text_report(rep: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    codes = rep.get("codes", [])
+    lines.append("=== Code Resonance Lab — Report (v1.2) ===\n")
+    for idx, code in enumerate(codes):
+        st = rep["stats"][idx]
+        lines.append(f"[Code {idx}] '{code}' (len={st['length']}, unique={st['unique']}, crc32=0x{st['crc32']:08X})")
+        lines.append(f"  entropy={st['entropy_bits']:.3f} bits ({st['entropy_bits_per_symbol']:.3f} bits/sym)  zlib={st['compress_ratio_zlib']:.2f}  lzma={st['compress_ratio_lzma']:.2f}")
+        fp = st['fft_periods']
+        lines.append("  periods:" + ", ".join([f" {k}≈{(v and f'{v:.2f}') or '—'}" for k, v in fp.items()]))
+        ac0 = st['autocorr_peaks']
+        peak_strs = []
+        for k, peaks in ac0.items():
+            if peaks:
+                peak_strs.append(" " + k + ":" + ",".join([f"lag{p[0]}@{p[1]:.2f}" for p in peaks]))
+        lines.append("  autocorr_peaks:" + ("".join(peak_strs) if peak_strs else " none"))
+        # top ngrams
+        ng = st['ngram_top']
+        lines.append("  top unigrams:" + ", ".join([f"{a}:{b}" for a, b in ng['unigram']]))
+        lines.append("  top bigrams :" + ", ".join([f"{a}:{b}" for a, b in ng['bigram']]))
+        lines.append("  top trigrams:" + ", ".join([f"{a}:{b}" for a, b in ng['trigram']]))
+        # residue-class histogram (if present)
+        if str(idx) in ():
+            pass  # never true; placeholder to keep static analyzers calm
+        if idx in rep.get('residue', {}):
+            rinfo = rep['residue'][idx]
+            lines.append(f"  residue(period={rinfo['period']}):")
+            for r, col in enumerate(rinfo['hist']):
+                if not col:
+                    continue
+                cols = ", ".join([f"{k}:{v}" for k, v in col.items()])
+                lines.append(f"    r={r}: {cols}")
+        # kasiski (if present)
+        if idx in rep.get('kasiski', {}):
+            kinf = rep['kasiski'][idx]
+            pv = ", ".join([f"{p}:{v}" for p, v in kinf['period_votes'][:8]])
+            lines.append(f"  kasiski period votes: {pv if pv else '—'}")
+        # per-code suggestions
+        for s in rep['suggestions']['single'][idx]:
+            lines.append("  • " + s)
+        lines.append("")
+
+    # Pairwise section
+    if rep.get("pairs"):
+        lines.append("=== Pairwise Comparisons ===")
+        for key, data in rep["pairs"].items():
+            i, j = data["compare"]
+            lines.append(f"[Pair {i}-{j}] '{codes[i]}' ↔ '{codes[j]}'")
+            lines.append(f"  Levenshtein={data['levenshtein']}  LCS={data['lcs']}")
+            for name, m in data["by_view"].items():
+                extra = ""
+                if 'p_cross' in m and 'p_mi' in m:
+                    extra = f"  p_cross={m['p_cross']:.3f} p_mi={m['p_mi']:.3f}"
+                lines.append(f"  {name}: cross_corr={m['cross_corr']:.3f}  mutual_info_bits={m['mutual_info_bits']:.3f}{extra}")
+            for s in rep['suggestions']['pairs'][f"{i}__{j}"]:
+                lines.append("  • " + s)
+            lines.append("")
+
+    # Overlays
+    if rep.get("overlays"):
+        lines.append("=== Prime/Attractor Overlays (base36) ===")
+        for k, ov in enumerate(rep["overlays"]):
+            lines.append(f"[Code {k}] kind={ov.get('kind')} period={ov.get('period')} var={ov.get('variance')} Hbits={ov.get('entropy_bits')}")
+
+    return "\n".join(lines)
+
+# -----------------------------
+# CLI
+# -----------------------------
+
+def _read_files(paths: List[str]) -> List[str]:
+    codes: List[str] = []
+    for p in paths or []:
+        if not os.path.exists(p):
+            raise FileNotFoundError(p)
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if s:
+                    codes.append(s)
+    return codes
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Cross-domain code analyzer with spectral + info-theoretic comparisons")
+    ap.add_argument("--codes", nargs="*", help="Literal codes to analyze")
+    ap.add_argument("--files", nargs="*", help="Files (one code per line)")
+    ap.add_argument("--map", type=str, default=None, help="JSON dict for custom symbol→number map")
+    ap.add_argument("--prime", action="store_true", help="Add prime/attractor overlay")
+    ap.add_argument("--report", choices=["text", "json"], default="text")
+    ap.add_argument("--json", action="store_true", help="Emit JSON (alias of --report json)")
+    ap.add_argument("--bins", type=int, default=16, help="Histogram bins for mutual information (default: 16)")
+    ap.add_argument("--residue", default=None, help="Residue histogram: 'auto' or integer period")
+    ap.add_argument("--kasiski", action="store_true", help="Run Kasiski repeat analysis (n=3..5)")
+    ap.add_argument("--sig", type=int, default=0, help="Permutation tests for pairwise metrics (heavier). e.g., --sig 200")
+    ap.add_argument("--seed", type=int, default=0, help="RNG seed for permutation tests")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
+
+    codes: List[str] = []
+    if args.codes:
+        codes.extend(args.codes)
+    if args.files:
+        codes.extend(_read_files(args.files))
+
+    if not codes:
+        print("[hint] Provide sequences via --codes or --files. Example: --codes 6EQUJ5 665236")
+        return
+
+    custom_map = None
+    if args.map:
+        try:
+            custom_map = json.loads(args.map)
+        except Exception as e:
+            print(f"[warn] Could not parse --map JSON: {e}")
+
+    rep = analyze_codes(
+        codes,
+        custom_map=custom_map,
+        prime_overlay=args.prime,
+        bins=args.bins,
+        do_residue=args.residue,
+        do_kasiski=args.kasiski,
+        sig_perms=args.sig,
+        verbose=args.verbose,
+        rng_seed=args.seed,
+    )
+    if args.json or args.report == "json":
+        print(json.dumps(rep, indent=2))
+    else:
+        print(format_text_report(rep))
+
+# -----------------------------
+# Tests
+# -----------------------------
+import unittest
+
+class TestEncodings(unittest.TestCase):
+    def test_base36_ascii(self):
+        v = encode_views("6EQUJ5")
+        assert v["base36"][0] == 6
+        assert v["base36"][1] == _BASE36['E']
+        assert len(v["ascii"]) == 6
+
+class TestEntropyAndFFT(unittest.TestCase):
+    def test_entropy_and_period(self):
+        code = "ABABABABABABABAB"
+        views = encode_views(code)
+        st = analyze_single(code, views)
+        # Allow for refined estimate (close to 2)
+        ord_per = st.fft_periods["ordinal"]
+        assert (ord_per is None) or (abs(ord_per - 2) < 1.0)
+        assert st.entropy_bits > 0.0
+
+class TestComparative(unittest.TestCase):
+    def test_edit_and_lcs(self):
+        a, b = "ABCDEF", "ABDCEF"
+        assert lcs_length(a, b) >= 4
+        assert levenshtein(a, b) >= 1
+
+class TestResidueKasiski(unittest.TestCase):
+    def test_residue_histogram(self):
+        code = "ABABABAB"
+        rh = residue_class_histogram(code, 2)
+        assert len(rh) == 2 and sum(rh[0].values()) + sum(rh[1].values()) == len(code)
+    def test_kasiski(self):
+        code = "ATTACKATDAWNATTACKATDUSK"
+        ka = kasiski_repeats(code, 3, 5)
+        assert isinstance(ka["period_votes"], list)
+
+if __name__ == "__main__":
+    if os.environ.get("RUN_TESTS") == "1":
+        unittest.main(argv=[""], verbosity=2, exit=False)
+    else:
+        main()

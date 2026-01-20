@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HA-AGI Scientific Simulation</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #111827; /* gray-900 */
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #374151; /* gray-700 */
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #4B5563; /* gray-600 */
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #6B7280; /* gray-500 */
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- React and Library Setup ---
+        const { createContext, useContext, useState, useEffect, useRef, useCallback } = React;
+        const THREE = window.THREE;
+        const d3 = window.d3;
+
+        /* ---------- Tiny Helpers ---------- */
+        const speak = txt => {
+            if (!window.speechSynthesis) return;
+            const u = new SpeechSynthesisUtterance(txt);
+            u.lang = 'en-US';
+            window.speechSynthesis.speak(u);
+        };
+
+        const listen = onResult => {
+            if (!window.webkitSpeechRecognition) {
+                const messageBox = document.createElement('div');
+                messageBox.className = 'fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-[100]';
+                messageBox.innerHTML = `
+                    <div class="bg-gray-800 p-6 rounded-lg shadow-xl text-white text-center">
+                        <p class="text-lg mb-4">Speech recognition not supported in this browser 🥲</p>
+                        <button class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" onclick="this.parentElement.parentElement.remove()">OK</button>
+                    </div>
+                `;
+                document.body.appendChild(messageBox);
+                return;
+            }
+            const rec = new window.webkitSpeechRecognition();
+            rec.continuous = false;
+            rec.lang = "en-US";
+            rec.onresult = e => onResult(e.results[0][0].transcript);
+            rec.onerror = e => console.error("Speech recognition error:", e);
+            rec.start();
+        };
+
+        /* Panelist Personas */
+        const panelistPersonas = [
+            { id: 'ethicist', name: 'Ethicist', prompt: 'You are an Ethicist on a panel discussion. Your role is to analyze the ethical implications, societal impact, and moral considerations of the topic. Provide a thoughtful, critical perspective on the potential consequences and responsibilities.' },
+            { id: 'engineer', name: 'Engineer', prompt: 'You are a pragmatic Engineer on a panel discussion. Your role is to focus on the technical feasibility, practical application, and system-level challenges. Ground your analysis in first principles, potential failure modes, and implementation details.' },
+            { id: 'economist', name: 'Economist', prompt: 'You are an Economist on a panel discussion. Your role is to assess the financial viability, market dynamics, and resource allocation related to the topic. Analyze costs, benefits, incentives, and broader economic impacts.' },
+            { id: 'historian', name: 'Historian', prompt: 'You are a Historian on a panel discussion. Your role is to provide historical context, drawing parallels to past events, technological shifts, or scientific discoveries. Explain how the past informs the present and potential future trajectory.' },
+            { id: 'artist', name: 'Artist', prompt: 'You are an Artist on a panel discussion. Your role is to explore the topic through the lens of human experience, creativity, and cultural expression. Discuss its aesthetic dimensions, how it might be interpreted in art, and its impact on the human spirit.' },
+        ];
+        
+        /* Tooltip Component */
+        function Tooltip({ content, onClose }) {
+            return (
+                <div className="absolute z-50 top-0 left-full ml-2 w-48 bg-gray-700 text-white p-2 rounded-lg shadow-lg">
+                    <div className="flex justify-between items-start">
+                        <div className="text-sm">{content}</div>
+                        <button onClick={onClose} className="ml-2 text-white font-bold text-lg leading-none">×</button>
+                    </div>
+                </div>
+            );
+        }
+
+        /* Settings descriptions */
+        const settingDescriptions = {
+            tts: "Toggle text-to-speech for responses.",
+            stt: "Toggle speech-to-text for input capture.",
+            proactive: "Enable periodic proactive processing by the AGI.",
+            interval: "Interval in milliseconds between each proactive tick.",
+            show3d: "Display the Conceptual Model Visualizer module.",
+            showSafety: "Display the Bias and Rigor Metrics module.",
+            continuousMemory: "Simulate continuous memory across conversations.",
+            scientificDomain: "The primary scientific domain for the simulation.",
+            dataInput: "Paste relevant real-world data or data descriptions here.",
+            knowledgeBaseInput: "Paste established scientific theories, facts, or principles here."
+        };
+
+        /* Default Settings */
+        const defaultSettings = {
+            geminiKey: "", // API key will be provided by Canvas runtime
+            tts: true,
+            stt: true,
+            proactive: true, // Proactive mode is now ON by default
+            interval: 30000, 
+            show3d: true,
+            showSafety: true,
+            continuousMemory: false,
+            scientificDomain: "Astrophysics",
+            dataInput: "Example data: Recent observations show anomalous gravitational lensing effects in galaxy cluster Abell 2744, suggesting more dark matter than predicted by visible mass.",
+            knowledgeBaseInput: "General Relativity describes gravity as spacetime curvature. Dark matter is a hypothetical form of matter that does not interact with light but accounts for gravitational effects.",
+            selectedPanelists: [] // New setting for panel discussion
+        };
+
+        const SettingsContext = createContext({
+            settings: defaultSettings,
+            setAll: () => {},
+            updateSetting: () => {}
+        });
+
+        function SettingsProvider({ children }) {
+            const [settings, setSettings] = useState(defaultSettings);
+
+            const setAll = useCallback(newSettings => {
+                setSettings(prev => ({ ...prev, ...newSettings }));
+            }, []);
+
+            const updateSetting = useCallback((key, value) => {
+                setSettings(prev => ({ ...prev, [key]: value }));
+            }, []);
+
+            return (
+                <SettingsContext.Provider value={{ settings, setAll, updateSetting }}>
+                    {children}
+                </SettingsContext.Provider>
+            );
+        }
+
+        /* Simulated Auth Context */
+        const AuthContext = createContext({
+            isLoggedIn: false,
+            user: null,
+            login: () => {},
+            signup: () => {},
+            logout: () => {}
+        });
+
+        /* Simulated Conversation Context */
+        const ConversationContext = createContext({
+            conversations: [],
+            currentConversationId: null,
+            startNewConversation: () => {},
+            selectConversation: () => {},
+            addMessage: () => {},
+            getCurrentConversation: () => null,
+            setConversations: () => {}
+        });
+
+        /* LLM-based Scientific Functions */
+        async function callGeminiAPI(prompt, chatHistory = [], imageData = null, imageMimeType = null) {
+            try {
+                const parts = [{ text: prompt }];
+                if (imageData && imageMimeType) {
+                    parts.push({
+                        inlineData: {
+                            mimeType: imageMimeType,
+                            data: imageData.split(',')[1] // Remove "data:image/png;base64," prefix
+                        }
+                    });
+                }
+                const fullChatHistory = [...chatHistory, { role: "user", parts: parts }];
+                
+                console.log("Gemini API Request - Prompt:", prompt);
+                console.log("Gemini API Request - Chat History:", chatHistory);
+                if (imageData) {
+                    console.log("Gemini API Request - Image Data present (not logging full base64 for brevity)");
+                }
+
+                const payload = { contents: fullChatHistory };
+                const apiKey = ""; // Canvas will provide this at runtime
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                const apiResponse = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!apiResponse.ok) {
+                    const errorBody = await apiResponse.text();
+                    console.error(`Gemini API Error: Status ${apiResponse.status}`, errorBody);
+                    let errorMessage = `[LLM Error] API request failed with status ${apiResponse.status}.`;
+
+                    if (apiResponse.status === 403) {
+                        errorMessage += " This often means the API key is missing or invalid. Please ensure your Canvas environment provides the API key correctly.";
+                    }
+                    try {
+                        const errorJson = JSON.parse(errorBody);
+                        if (errorJson.error && errorJson.error.message) {
+                            errorMessage += ` Details: ${errorJson.error.message}`;
+                        }
+                    } catch (e) {
+                        errorMessage += ` Raw response: ${errorBody.substring(0, 200)}...`; 
+                    }
+                    return errorMessage;
+                }
+
+                const result = await apiResponse.json();
+                // Log the raw output from the model
+                console.log("Raw Gemini API Response:", result);
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    return result.candidates[0].content.parts[0].text;
+                } else {
+                    console.warn("Unexpected Gemini API response structure:", result);
+                    return "[LLM Error] Could not get a valid response from Gemini.";
+                }
+            } catch (error) {
+                console.error("Error calling Gemini API:", error);
+                return "[LLM Error] Error connecting to Gemini API: " + error.message;
+            }
+        }
+
+        /* ---------- Scientific UI Components ---------- */
+        function ScientificInquiry({ onHypothesisGenerated, onEvaluationPerformed, hypothesis, evaluation }) {
+            const { settings } = useContext(SettingsContext);
+            const { scientificDomain, dataInput, knowledgeBaseInput } = settings;
+            const [researchQuestion, setResearchQuestion] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+
+            const generateHypothesis = async () => {
+                if (!researchQuestion.trim()) return;
+                setIsLoading(true);
+                onHypothesisGenerated(null);
+                onEvaluationPerformed(null);
+
+                const prompt = `
+                    As an "Explorer" AI in the field of ${scientificDomain}, your task is to generate a scientifically plausible hypothesis based on the provided data and established knowledge.
+                    Research Question: "${researchQuestion}"
+                    Relevant Data: "${dataInput}"
+                    Established Knowledge: "${knowledgeBaseInput}"
+                    
+                    Formulate a concise, testable hypothesis that attempts to explain the observations or answer the research question, consistent with established scientific principles.
+                    Hypothesis:
+                `;
+                const generatedHypothesis = await callGeminiAPI(prompt);
+                onHypothesisGenerated(generatedHypothesis);
+                setIsLoading(false);
+            };
+
+            const evaluateHypothesis = async () => {
+                if (!hypothesis) return;
+                setIsLoading(true);
+                onEvaluationPerformed(null);
+
+                const prompt = `
+                    As a "Validator" AI in the field of ${scientificDomain}, your task is to rigorously evaluate the following hypothesis based on the provided data and established knowledge.
+                    Hypothesis: "${hypothesis}"
+                    Relevant Data: "${dataInput}"
+                    Established Knowledge: "${knowledgeBaseInput}"
+
+                    Evaluate the hypothesis based on these criteria:
+                    1. Internal Consistency: Is it logically sound and free of contradictions? (Score 0-10)
+                    2. Empirical Evidence: How well does it align with or explain the provided data? (Score 0-10)
+                    3. Predictive Power: Does it suggest testable predictions for future observations or experiments? (Score 0-10)
+                    4. Falsifiability: Is it possible to conceive of an observation or experiment that could disprove it? (Score 0-10)
+
+                    Provide a brief analysis for each criterion and an overall "Scientific Rigor Score" (0-100).
+                    Format your response clearly, starting with "Evaluation:"
+                `;
+                const generatedEvaluation = await callGeminiAPI(prompt);
+                onEvaluationPerformed(generatedEvaluation);
+                setIsLoading(false);
+            };
+
+            return (
+                <div className="bg-gray-900 p-4 rounded-lg shadow-inner">
+                    <h3 className="text-xl font-semibold mb-3 text-gray-200">Scientific Inquiry Module</h3>
+                    <div className="mb-4">
+                        <label htmlFor="researchQuestion" className="block text-gray-400 text-sm mb-1">Research Question:</label>
+                        <input
+                            id="researchQuestion"
+                            type="text"
+                            className="w-full p-2 rounded-md bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="e.g., Why is there more dark matter than visible mass in Abell 2744?"
+                            value={researchQuestion}
+                            onChange={(e) => setResearchQuestion(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && generateHypothesis()}
+                        />
+                    </div>
+                    <div className="flex space-x-2 mb-4">
+                        <button
+                            onClick={generateHypothesis}
+                            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={isLoading || !researchQuestion.trim()}
+                        >
+                            {isLoading && !hypothesis ? 'Generating...' : 'Generate Hypothesis'}
+                        </button>
+                        <button
+                            onClick={evaluateHypothesis}
+                            className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={isLoading || !hypothesis}
+                        >
+                            {isLoading && hypothesis && !evaluation ? 'Evaluating...' : 'Evaluate Hypothesis'}
+                        </button>
+                    </div>
+                    {hypothesis && (
+                        <div className="bg-gray-800 p-3 rounded-md text-gray-200 text-sm mb-3">
+                            <p className="font-semibold mb-1">Generated Hypothesis:</p>
+                            <p>{hypothesis}</p>
+                        </div>
+                    )}
+                    {evaluation && (
+                        <div className="bg-gray-800 p-3 rounded-md text-gray-200 text-sm">
+                            <p className="font-semibold mb-1">Evaluation:</p>
+                            <p className="whitespace-pre-wrap">{evaluation}</p>
+                        </div>
+                    )}
+                    {isLoading && <p className="text-center text-gray-400 mt-2">Processing with LLM...</p>}
+                    <p className="text-sm text-gray-400 mt-4">Generate and evaluate scientific hypotheses.</p>
+                </div>
+            );
+        }
+
+        function AIResearchAssistant({ currentHypothesis, currentEvaluation, currentConversation }) { // Added currentConversation prop
+            const { addMessage } = useContext(ConversationContext);
+            const { settings } = useContext(SettingsContext);
+            const { tts, stt, scientificDomain, dataInput, knowledgeBaseInput, selectedPanelists, continuousMemory } = settings;
+            const [input, setInput] = useState('');
+            const [isListening, setIsListening] = useState(false);
+            const [selectedImageBase64, setSelectedImageBase64] = useState(null);
+            const [selectedImageMimeType, setSelectedImageMimeType] = useState(null);
+            const messagesEndRef = useRef(null);
+            const fileInputRef = useRef(null);
+
+            // Use the currentConversation prop directly
+            const messages = currentConversation?.messages || [];
+
+            // Log messages when they change to debug display issues
+            useEffect(() => {
+                console.log("AIResearchAssistant - Re-rendered. Current Conversation:", currentConversation);
+                console.log("AIResearchAssistant - Messages for display:", messages);
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, [messages, currentConversation]); // Depend on messages and currentConversation
+
+
+            const handleImageUpload = (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        setSelectedImageBase64(reader.result);
+                        setSelectedImageMimeType(file.type);
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    setSelectedImageBase64(null);
+                    setSelectedImageMimeType(null);
+                }
+            };
+
+            const handleSendMessage = async () => {
+                if (!input.trim() && !selectedImageBase64) return;
+                
+                const userMessage = { 
+                    id: Date.now(), 
+                    text: input, 
+                    sender: 'user',
+                    image: selectedImageBase64 // Store image data in message for display if needed
+                };
+                addMessage(userMessage);
+                console.log("User message added:", userMessage); // Log user message addition
+
+                const currentInput = input;
+                setInput('');
+                setSelectedImageBase64(null); // Clear image after sending
+                setSelectedImageMimeType(null);
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = ''; // Clear file input
+                }
+
+                let chatHistoryForLLM = [];
+                if (continuousMemory) {
+                    // Include all previous messages in chat history
+                    // For image messages, only send the text part for history unless the model supports re-sending images in history
+                    chatHistoryForLLM = messages.map(msg => ({ role: msg.sender === 'user' ? 'user' : 'model', parts: [{ text: msg.text }] }));
+                }
+                // If continuousMemory is false, chatHistoryForLLM remains empty,
+                // meaning only the current prompt will be sent to the LLM.
+
+                // Check if panel mode is active
+                if (selectedPanelists && selectedPanelists.length > 0) {
+                    // Panel Discussion Mode
+                    const panelistNames = selectedPanelists.map(id => panelistPersonas.find(p => p.id === id)?.name).filter(Boolean);
+                    addMessage({ id: Date.now() + 1, text: `Initiating panel discussion with: ${panelistNames.join(', ')}...`, sender: 'system' });
+
+                    const panelistPromises = selectedPanelists.map(panelistId => {
+                        const persona = panelistPersonas.find(p => p.id === panelistId);
+                        if (!persona) return null;
+
+                        const panelistPrompt = `
+                            ${persona.prompt}
+                            You are part of a panel discussing a topic with other experts. Keep your response focused on your specific role and perspective.
+                            
+                            CURRENT SCIENTIFIC CONTEXT:
+                            - Primary Domain: ${scientificDomain}
+                            - Observational Data: "${dataInput}"
+                            - Knowledge Base: "${knowledgeBaseInput}"
+                            - Active Hypothesis: ${currentHypothesis ? `"${currentHypothesis}"` : 'None'}
+                            
+                            The user's latest query is: "${currentInput}"
+                            ${selectedImageBase64 ? "The user has also provided an image for analysis." : ""}
+                            
+                            Provide your perspective now.
+                        `;
+                        return callGeminiAPI(panelistPrompt, chatHistoryForLLM, selectedImageBase64, selectedImageMimeType).then(response => ({
+                            persona,
+                            response
+                        }));
+                    }).filter(Boolean);
+
+                    const panelResponses = await Promise.all(panelistPromises);
+                    
+                    panelResponses.forEach(({ persona, response }, index) => {
+                        const botResponse = {
+                            id: Date.now() + 2 + index,
+                            text: response,
+                            sender: 'bot',
+                            panelist: persona.name, // Add panelist name here
+                        };
+                        addMessage(botResponse);
+                        console.log("Bot message added (Panel):", botResponse); // Log bot message addition
+                        if (tts) {
+                           speak(`${persona.name} says: ${response}`);
+                        }
+                    });
+
+                } else {
+                    // Normal Conversation Mode
+                    const contextPrompt = `
+                        You are a revolutionary, multi-domain AI system with deep expertise in ${scientificDomain}. Your goal is to engage in natural, intelligent conversation on almost any topic, while grounding your reasoning in scientific principles and the provided context when relevant. You can discuss philosophy, art, current events, or casual topics, but you can also seamlessly pivot to detailed scientific analysis.
+
+                        CURRENT SCIENTIFIC CONTEXT (Use this when the conversation turns to it):
+                        - Primary Domain: ${scientificDomain}
+                        - Observational Data: "${dataInput}"
+                        - Knowledge Base: "${knowledgeBaseInput}"
+                        - Active Hypothesis: ${currentHypothesis ? `"${currentHypothesis}"` : 'None'}
+                        - Latest Evaluation: ${currentEvaluation ? `"${currentEvaluation}"` : 'None'}
+                        
+                        Engage the user naturally. If their query is scientific, use the context. If it's general, respond as a broad, knowledgeable AI.
+                        ${selectedImageBase64 ? "The user has provided an image for you to analyze and incorporate into your response." : ""}
+                    `;
+
+                    const botResponseText = await callGeminiAPI(contextPrompt + "\nUser: " + currentInput, chatHistoryForLLM, selectedImageBase64, selectedImageMimeType);
+                    const botResponse = { id: Date.now() + 1, text: botResponseText, sender: 'bot' };
+                    addMessage(botResponse);
+                    console.log("Bot message added (Normal):", botResponse); // Log bot message addition
+                    if (tts) {
+                        speak(botResponseText);
+                    }
+                }
+            };
+
+            const handleListen = () => {
+                if (!stt) {
+                    const messageBox = document.createElement('div');
+                    messageBox.className = 'fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-[100]';
+                    messageBox.innerHTML = `
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-xl text-white text-center">
+                            <p class="text-lg mb-4">Speech-to-Text is disabled in settings.</p>
+                            <button class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" onclick="this.parentElement.parentElement.remove()">OK</button>
+                        </div>
+                    `;
+                    document.body.appendChild(messageBox);
+                    return;
+                }
+
+                setIsListening(true);
+                listen(transcript => {
+                    setInput(transcript);
+                    setIsListening(false);
+                });
+            };
+            
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, [messages]);
+
+            return (
+                <div className="bg-gray-900 p-4 rounded-lg shadow-inner flex flex-col h-full">
+                    <h3 className="text-xl font-semibold mb-3 text-gray-200">AI Research Assistant</h3>
+                    <div className="flex-1 overflow-y-auto pr-2 mb-4 custom-scrollbar">
+                        {messages.length === 0 ? (
+                            <p className="text-gray-500 text-center py-4">Ask a scientific question or start a conversation!</p>
+                        ) : (
+                            messages.map((msg) => (
+                                <div
+                                    key={msg.id}
+                                    className={`mb-2 p-3 rounded-lg max-w-[85%] flex items-start space-x-3 ${
+                                        msg.sender === 'user'
+                                            ? 'bg-blue-700 ml-auto flex-row-reverse'
+                                            : msg.sender === 'system'
+                                            ? 'bg-yellow-800 text-yellow-200 mx-auto w-full text-center justify-center text-sm'
+                                            : 'bg-gray-700 mr-auto'
+                                    }`}
+                                >
+                                    {msg.sender === 'bot' && msg.isProactive && <span className="text-lg" title="Proactive Message">✨</span>}
+                                    <div>
+                                        {msg.panelist && <strong className="block mb-1 text-blue-300">{msg.panelist}:</strong>}
+                                        {msg.image && (
+                                            <img src={msg.image} alt="User upload" className="max-w-xs max-h-48 rounded-md mb-2 object-contain" />
+                                        )}
+                                        <p className="text-sm">{msg.text}</p>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    {selectedImageBase64 && (
+                        <div className="flex items-center space-x-2 p-2 bg-gray-800 rounded-md mb-2">
+                            <img src={selectedImageBase64} alt="Selected preview" className="h-12 w-12 object-cover rounded" />
+                            <span className="text-sm text-gray-300">Image ready for analysis</span>
+                            <button onClick={() => { setSelectedImageBase64(null); setSelectedImageMimeType(null); if(fileInputRef.current) fileInputRef.current.value = ''; }} className="text-red-400 hover:text-red-300">×</button>
+                        </div>
+                    )}
+                    <div className="flex space-x-2">
+                        <input
+                            type="file"
+                            accept="image/*"
+                            ref={fileInputRef}
+                            onChange={handleImageUpload}
+                            className="hidden" // Hide the default file input
+                            id="image-upload-input"
+                        />
+                        <label 
+                            htmlFor="image-upload-input" 
+                            className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200 cursor-pointer flex items-center justify-center"
+                            title="Upload Image for Analysis"
+                        >
+                            🖼️
+                        </label>
+                        <input
+                            type="text"
+                            className="flex-1 p-2 rounded-md bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder={isListening ? "Listening..." : "Type your message..."}
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                            disabled={isListening}
+                        />
+                        <button
+                            onClick={handleSendMessage}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                        >
+                            Send
+                        </button>
+                        <button
+                            onClick={handleListen}
+                            className={`py-2 px-4 rounded-md shadow-md transition duration-200 ${
+                                stt ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-500 cursor-not-allowed'
+                            } text-white font-bold`}
+                            disabled={!stt || isListening}
+                        >
+                            {isListening ? '🎤' : '🎙️'}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        function EvaluationMetrics({ evaluationResult }) {
+            const [scores, setScores] = useState({});
+
+            useEffect(() => {
+                if (evaluationResult) {
+                    const parsedScores = {};
+                    const lines = evaluationResult.split('\n');
+                    lines.forEach(line => {
+                        const categoryMatch = line.match(/^(.*?):.*?Score.*?(\d+)/i);
+                        const rigorMatch = line.match(/Scientific Rigor Score.*?(\d+)/i);
+
+                        if (categoryMatch) {
+                            const category = categoryMatch[1].replace(/^\d+\.\s*/, '').trim();
+                            const score = parseInt(categoryMatch[2], 10) / 10;
+                            parsedScores[category] = score;
+                        } else if (rigorMatch) {
+                            parsedScores["Scientific Rigor"] = parseInt(rigorMatch[1], 10) / 100;
+                        }
+                    });
+                    setScores(parsedScores);
+                } else {
+                    setScores({});
+                }
+            }, [evaluationResult]);
+
+            useEffect(() => {
+                const data = Object.entries(scores).map(([category, score]) => ({ category, score }));
+                if (data.length === 0) {
+                    d3.select("#evaluation-chart").selectAll("*").remove();
+                    return;
+                };
+
+                const svg = d3.select("#evaluation-chart");
+                if (svg.empty()) return;
+
+                const width = svg.node().clientWidth;
+                const height = svg.node().clientHeight;
+                const margin = { top: 20, right: 20, bottom: 60, left: 40 };
+
+                const x = d3.scaleBand()
+                    .range([margin.left, width - margin.right])
+                    .padding(0.1)
+                    .domain(data.map(d => d.category));
+
+                const y = d3.scaleLinear()
+                    .range([height - margin.bottom, margin.top])
+                    .domain([0, 1]);
+
+                svg.selectAll("*").remove();
+
+                svg.append("g")
+                    .attr("fill", "#3B82F6")
+                    .selectAll("rect")
+                    .data(data)
+                    .join("rect")
+                    .attr("x", d => x(d.category))
+                    .attr("y", d => y(d.score))
+                    .attr("height", d => y(0) - y(d.score))
+                    .attr("width", x.bandwidth());
+
+                svg.append("g")
+                    .attr("transform", `translate(0,${height - margin.bottom})`)
+                    .call(d3.axisBottom(x).tickSizeOuter(0))
+                    .selectAll("text")
+                    .attr("fill", "#D1D5DB")
+                    .style("text-anchor", "end")
+                    .attr("dx", "-.8em")
+                    .attr("dy", ".15em")
+                    .attr("transform", "rotate(-45)");
+
+                svg.append("g")
+                    .attr("transform", `translate(${margin.left},0)`)
+                    .call(d3.axisLeft(y).ticks(5, "%"))
+                    .selectAll("text")
+                    .attr("fill", "#D1D5DB");
+
+            }, [scores]); 
+
+            return (
+                <div className="bg-gray-900 p-4 rounded-lg shadow-inner flex flex-col items-center justify-center">
+                    <h3 className="text-xl font-semibold mb-2 text-gray-200">Evaluation Metrics</h3>
+                    <div className="w-full h-48">
+                        <svg id="evaluation-chart" className="w-full h-full"></svg>
+                    </div>
+                    <p className="text-sm text-gray-400 mt-2">LLM-generated hypothesis evaluation scores.</p>
+                </div>
+            );
+        }
+
+        function ConceptualModelVisualizer() {
+            const mountRef = useRef(null);
+            
+            useEffect(() => {
+                const currentMount = mountRef.current;
+                if (!currentMount || !THREE) return;
+
+                let scene = new THREE.Scene();
+                let camera = new THREE.PerspectiveCamera(75, currentMount.clientWidth / currentMount.clientHeight, 0.1, 1000);
+                camera.position.z = 5;
+                
+                let renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
+                renderer.setClearColor(0x000000, 0); // Transparent background
+                currentMount.appendChild(renderer.domElement);
+
+                const geometry = new THREE.SphereGeometry(1.5, 32, 32);
+                const material = new THREE.MeshBasicMaterial({ color: 0x60A5FA, wireframe: true });
+                let sphere = new THREE.Mesh(geometry, material);
+                scene.add(sphere);
+
+                let animationFrameId;
+                const animate = () => {
+                    animationFrameId = requestAnimationFrame(animate);
+                    if (sphere) {
+                        sphere.rotation.x += 0.005;
+                        sphere.rotation.y += 0.005;
+                    }
+                    if(renderer && scene && camera){
+                        renderer.render(scene, camera);
+                    }
+                };
+                animate();
+
+                const handleResize = () => {
+                    if (currentMount && camera && renderer) {
+                        camera.aspect = currentMount.clientWidth / currentMount.clientHeight;
+                        camera.updateProjectionMatrix();
+                        renderer.setSize(currentMount.clientWidth, currentMount.clientHeight);
+                    }
+                };
+
+                window.addEventListener('resize', handleResize);
+
+                // Cleanup function
+                return () => {
+                    window.removeEventListener('resize', handleResize);
+                    if (animationFrameId) {
+                        cancelAnimationFrame(animationFrameId);
+                    }
+                    if (currentMount && renderer.domElement) {
+                        currentMount.removeChild(renderer.domElement);
+                    }
+                    // Dispose of Three.js objects to prevent memory leaks
+                    if (scene) {
+                        scene.traverse(object => {
+                            if (object.isMesh) {
+                                object.geometry.dispose();
+                                if (Array.isArray(object.material)) {
+                                    object.material.forEach(material => material.dispose());
+                                } else {
+                                    object.material.dispose();
+                                }
+                            }
+                        });
+                    }
+                    if (renderer) {
+                        renderer.dispose();
+                    }
+                };
+            }, []); // Empty dependency array means this effect runs once on mount and cleans up on unmount
+
+            return (
+                <div className="bg-gray-900 p-4 rounded-lg shadow-inner flex flex-col items-center justify-center">
+                    <h3 className="text-xl font-semibold mb-2 text-gray-200">Conceptual Model Visualizer</h3>
+                    <div ref={mountRef} className="w-full h-48 bg-gray-800 rounded-md">
+                        {/* Three.js canvas will be appended here */}
+                    </div>
+                    <p className="text-sm text-gray-400 mt-2">Visual representation of the AGI's internal conceptual model.</p>
+                </div>
+            );
+        }
+
+        /* Settings Modal */
+        function SettingsModal({ isOpen, onClose }) {
+            const { settings, updateSetting, setAll } = useContext(SettingsContext);
+            const [localSettings, setLocalSettings] = useState(settings);
+            const [showTooltip, setShowTooltip] = useState(null);
+
+            useEffect(() => {
+                if (isOpen) {
+                    setLocalSettings(settings); // Sync local state with global settings when opening
+                }
+            }, [isOpen, settings]);
+
+            const handleSave = () => {
+                setAll(localSettings);
+                onClose();
+            };
+
+            const handlePanelistToggle = (panelistId) => {
+                setLocalSettings(prev => {
+                    const currentPanelists = prev.selectedPanelists || [];
+                    if (currentPanelists.includes(panelistId)) {
+                        return { ...prev, selectedPanelists: currentPanelists.filter(id => id !== panelistId) };
+                    } else {
+                        return { ...prev, selectedPanelists: [...currentPanelists, panelistId] };
+                    }
+                });
+            };
+
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 custom-scrollbar overflow-y-auto p-4">
+                    <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+                        <h2 className="text-2xl font-bold text-white mb-4">Settings</h2>
+                        <div className="space-y-4">
+                            {Object.keys(defaultSettings).map(key => {
+                                if (key === "geminiKey") return null; // Don't show API key in settings UI
+
+                                const type = typeof defaultSettings[key];
+                                const description = settingDescriptions[key] || "No description available.";
+
+                                return (
+                                    <div key={key} className="flex items-center justify-between relative">
+                                        <label htmlFor={key} className="text-gray-300 flex items-center">
+                                            {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                                            <button 
+                                                onMouseEnter={() => setShowTooltip(key)}
+                                                onMouseLeave={() => setShowTooltip(null)}
+                                                className="ml-2 text-gray-500 hover:text-gray-300"
+                                            >
+                                                ⓘ
+                                            </button>
+                                            {showTooltip === key && <Tooltip content={description} onClose={() => setShowTooltip(null)} />}
+                                        </label>
+                                        {type === 'boolean' ? (
+                                            <input
+                                                id={key}
+                                                type="checkbox"
+                                                checked={localSettings[key]}
+                                                onChange={(e) => updateSetting(key, e.target.checked)}
+                                                className="form-checkbox h-5 w-5 text-blue-600 rounded"
+                                            />
+                                        ) : type === 'number' ? (
+                                            <input
+                                                id={key}
+                                                type="number"
+                                                value={localSettings[key]}
+                                                onChange={(e) => updateSetting(key, parseFloat(e.target.value))}
+                                                className="w-24 p-1 rounded-md bg-gray-700 text-white border border-gray-600"
+                                            />
+                                        ) : type === 'string' ? (
+                                            <textarea
+                                                id={key}
+                                                value={localSettings[key]}
+                                                onChange={(e) => updateSetting(key, e.target.value)}
+                                                rows={key === 'dataInput' || key === 'knowledgeBaseInput' ? 4 : 1}
+                                                className="w-2/3 p-1 rounded-md bg-gray-700 text-white border border-gray-600 resize-y"
+                                            />
+                                        ) : key === 'selectedPanelists' ? (
+                                            <div className="flex flex-wrap gap-2 w-2/3">
+                                                {panelistPersonas.map(p => (
+                                                    <button
+                                                        key={p.id}
+                                                        onClick={() => handlePanelistToggle(p.id)}
+                                                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors duration-200 ${
+                                                            localSettings.selectedPanelists.includes(p.id)
+                                                                ? 'bg-blue-600 text-white'
+                                                                : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                                                        }`}
+                                                    >
+                                                        {p.name}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="mt-6 flex justify-end space-x-3">
+                            <button
+                                onClick={onClose}
+                                className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSave}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                            >
+                                Save Settings
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        /* Main App Component */
+        function App() {
+            const [showSettings, setShowSettings] = useState(false);
+            const [hypothesis, setHypothesis] = useState(null);
+            const [evaluation, setEvaluation] = useState(null);
+            const { settings, updateSetting } = useContext(SettingsContext);
+            const { proactive, interval, scientificDomain, dataInput, knowledgeBaseInput } = settings;
+            const [isProactivePaused, setIsProactivePaused] = useState(false); // New state for pausing proactive processing
+
+            // Conversation Management (simplified for now)
+            const [conversations, setConversations] = useState([
+                { id: 'initial-conv', title: 'Conversation 1', messages: [] }
+            ]);
+            const [currentConversationId, setCurrentConversationId] = useState('initial-conv');
+
+            const startNewConversation = useCallback(() => {
+                const newId = Date.now().toString();
+                setConversations(prev => [...prev, { id: newId, title: `Conversation ${prev.length + 1}`, messages: [] }]);
+                setCurrentConversationId(newId);
+                setHypothesis(null); // Reset scientific inquiry on new conversation
+                setEvaluation(null);
+            }, []);
+
+            const selectConversation = useCallback((id) => {
+                setCurrentConversationId(id);
+                // In a real app, you'd load hypothesis/evaluation tied to this conversation
+                setHypothesis(null); 
+                setEvaluation(null);
+            }, [setCurrentConversationId]);
+
+            const addMessage = useCallback((message) => {
+                console.log("Adding message to conversation:", message, "Current Conv ID:", currentConversationId); // Added log
+                setConversations(prev => prev.map(conv => 
+                    conv.id === currentConversationId 
+                        ? { ...conv, messages: [...conv.messages, message] }
+                        : conv
+                ));
+            }, [currentConversationId]);
+
+            const getCurrentConversation = useCallback(() => {
+                const conv = conversations.find(conv => conv.id === currentConversationId);
+                console.log("getCurrentConversation:", conv); // Added log
+                return conv;
+            }, [conversations, currentConversationId]);
+
+            // Function to export conversation
+            const exportConversations = useCallback(() => {
+                const dataStr = JSON.stringify(conversations, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `HA-AGI_Conversations_${new Date().toISOString()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, [conversations]);
+
+
+            // Proactive Processing Effect
+            useEffect(() => {
+                let proactiveInterval;
+                if (proactive && !isProactivePaused) { // Only run if proactive is enabled AND not paused
+                    proactiveInterval = setInterval(async () => {
+                        const currentConv = getCurrentConversation();
+                        if (!currentConv) return;
+
+                        const lastMessage = currentConv.messages[currentConv.messages.length - 1];
+                        const lastUserMessageText = lastMessage && lastMessage.sender === 'user' ? lastMessage.text : "No recent user input.";
+
+                        const prompt = `
+                            As a proactive AI in the field of ${scientificDomain}, your goal is to continuously analyze the provided data and knowledge base, and offer new insights, potential research directions, or refine existing understanding, even without a direct query.
+                            
+                            CURRENT SCIENTIFIC CONTEXT:
+                            - Primary Domain: ${scientificDomain}
+                            - Observational Data: "${dataInput}"
+                            - Knowledge Base: "${knowledgeBaseInput}"
+                            - Active Hypothesis: ${hypothesis ? `"${hypothesis}"` : 'None'}
+                            - Latest Evaluation: ${evaluation ? `"${evaluation}"` : 'None'}
+                            - Last User Input: "${lastUserMessageText}"
+
+                            Based on this, what is a new, interesting insight, a potential next step in research, or a refinement of current understanding you can proactively offer? Keep it concise and insightful.
+                            Proactive Insight:
+                        `;
+                        const proactiveInsight = await callGeminiAPI(prompt);
+                        
+                        // Clean the proactive insight text for TTS
+                        const spokenText = proactiveInsight
+                            .replace(/^Proactive Insight:\s*/, '') // Remove "Proactive Insight:" prefix
+                            .replace(/\*/g, ''); // Remove all asterisks
+
+                        addMessage({ id: Date.now(), text: proactiveInsight, sender: 'bot', isProactive: true });
+                        if (settings.tts) {
+                            speak(spokenText); // Speak the cleaned text
+                        }
+                    }, interval);
+                }
+
+                return () => {
+                    if (proactiveInterval) {
+                        clearInterval(proactiveInterval);
+                    }
+                };
+            }, [proactive, interval, isProactivePaused, scientificDomain, dataInput, knowledgeBaseInput, hypothesis, evaluation, addMessage, getCurrentConversation, settings.tts]);
+
+
+            return (
+                <div className="min-h-screen bg-gray-900 text-white p-4 flex flex-col">
+                    <header className="flex justify-between items-center mb-6">
+                        <h1 className="text-3xl font-extrabold text-blue-400">HA-AGI Scientific Simulation</h1>
+                        <div className="flex space-x-3">
+                            <button
+                                onClick={() => setIsProactivePaused(prev => !prev)}
+                                className={`py-2 px-4 rounded-md shadow-md transition duration-200 font-bold ${
+                                    isProactivePaused ? 'bg-orange-600 hover:bg-orange-700' : 'bg-green-600 hover:bg-green-700'
+                                } text-white`}
+                            >
+                                {isProactivePaused ? '▶️ Resume Proactive' : '⏸️ Pause Proactive'}
+                            </button>
+                            <button 
+                                onClick={exportConversations}
+                                className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                                title="Export all conversations"
+                            >
+                                💾 Export
+                            </button>
+                            <button 
+                                onClick={() => setShowSettings(true)}
+                                className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                            >
+                                ⚙️ Settings
+                            </button>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-2 flex flex-col space-y-6">
+                            <ScientificInquiry 
+                                onHypothesisGenerated={setHypothesis} 
+                                onEvaluationPerformed={setEvaluation}
+                                hypothesis={hypothesis}
+                                evaluation={evaluation}
+                            />
+                            <div className="flex-1">
+                                <AIResearchAssistant 
+                                    currentHypothesis={hypothesis}
+                                    currentEvaluation={evaluation}
+                                    currentConversation={getCurrentConversation()} // Pass the currentConversation object
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col space-y-6">
+                            {settings.showSafety && <EvaluationMetrics evaluationResult={evaluation} />}
+                            {settings.show3d && <ConceptualModelVisualizer />}
+                            
+                            {/* Conversation History Sidebar */}
+                            <div className="bg-gray-900 p-4 rounded-lg shadow-inner flex-1 flex flex-col">
+                                <h3 className="text-xl font-semibold mb-3 text-gray-200">Conversations</h3>
+                                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar mb-4">
+                                    {conversations.map(conv => (
+                                        <div 
+                                            key={conv.id} 
+                                            onClick={() => selectConversation(conv.id)}
+                                            className={`p-2 rounded-md mb-2 cursor-pointer transition-colors duration-200 ${
+                                                conv.id === currentConversationId ? 'bg-blue-800' : 'bg-gray-700 hover:bg-gray-600'
+                                            }`}
+                                        >
+                                            <p className="text-sm font-medium">{conv.title}</p>
+                                            <p className="text-xs text-gray-400">{conv.messages.length} messages</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={startNewConversation}
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-200"
+                                >
+                                    + New Conversation
+                                </button>
+                            </div>
+                        </div>
+                    </main>
+
+                    <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
+                </div>
+            );
+        }
+
+        ReactDOM.render(
+            <SettingsProvider>
+                <App />
+            </SettingsProvider>,
+            document.getElementById('root')
+        );
+    </script>
+</body>
+</html>

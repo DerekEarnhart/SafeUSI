@@ -1,0 +1,152 @@
+Unified Harmonic AGI Studio
+Code Generator
+1. Generate a Single File
+
+Generate Code
+Generated Output
+Copy
+import os
+import argparse
+import sys
+import google.generativeai as genai
+
+# --- Configuration ---
+# You need to set your Gemini API key as an environment variable.
+# For example, on Linux/macOS: export GEMINI_API_KEY="YOUR_API_KEY"
+# On Windows: set GEMINI_API_KEY="YOUR_API_KEY"
+# Or, you can place it directly here for testing, but it's not recommended for production.
+# API_KEY = "YOUR_API_KEY"
+
+
+def load_text_from_file(file_path: str) -> str:
+    """
+    Loads text content from a specified file path.
+    Assumes the file is plain text.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading file '{file_path}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    """
+    Main function to set up the Gemini chatbot and handle the conversation.
+    """
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(
+        description="Gemini Chatbot for Q&A based on a provided text document. "
+                    "Set your Gemini API key in the GEMINI_API_KEY environment variable."
+    )
+    parser.add_argument(
+        "text_file",
+        help="Path to the plain text file (e.g., .txt) containing the document "
+             "to use as the knowledge base for the chatbot. "
+             "For PDFs or web pages, extract the text content into a .txt file first."
+    )
+    args = parser.parse_args()
+
+    # --- API Key Setup ---
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("Error: GEMINI_API_KEY environment variable not set.", file=sys.stderr)
+        print("Please set the GEMINI_API_KEY environment variable with your Gemini API key.", file=sys.stderr)
+        print("You can get an API key from https://ai.google.dev/", file=sys.stderr)
+        sys.exit(1)
+
+    genai.configure(api_key=api_key)
+
+    # --- Load Document Text ---
+    print(f"Loading document from '{args.text_file}'...")
+    document_text = load_text_from_file(args.text_file)
+
+    if not document_text.strip():
+        print("Error: The loaded document is empty or contains only whitespace. Please provide a document with content.", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Initialize Gemini Model and Chat ---
+    try:
+        # Using 'gemini-pro' for text-only interactions
+        model = genai.GenerativeModel('gemini-pro')
+        
+        # Start a chat session. The history will be managed automatically by the chat object.
+        chat = model.start_chat(history=[])
+
+        # Define the initial instruction for the model.
+        # This is crucial for restricting the model's answers to the provided document.
+        initial_instruction = (
+            "You are a helpful assistant that answers questions ONLY based on the "
+            "following text. Do not use any outside knowledge or information not "
+            "explicitly present in the provided document. If the answer is not "
+            "present or directly derivable from the text, clearly state that "
+            "you cannot find the answer in the provided document. If the question "
+            "is not related to the document, politely decline to answer."
+        )
+
+        # Send the context document and the initial instruction as the first turn.
+        # This primes the model with the knowledge base it should refer to for all subsequent questions.
+        print("Sending document context to Gemini model (this may take a moment for large files)...")
+        _ = chat.send_message(f"{initial_instruction}\n\nDocument:\n{document_text}")
+        
+        print("\nDocument loaded successfully. You can now ask questions based *only* on this document.")
+        print("----------------------------------------------------------------------")
+        print("Type your questions below. Type 'exit' to quit the chat.")
+        print("----------------------------------------------------------------------")
+
+    except genai.APIError as e:
+        print(f"Error initializing Gemini API or sending initial context: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred during model setup: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Conversation Loop ---
+    while True:
+        try:
+            user_question = input("\nYour question: ")
+
+            if user_question.lower() == 'exit':
+                print("Exiting chat. Goodbye!")
+                break
+
+            if not user_question.strip():
+                print("Please enter a question.")
+                continue
+
+            print("Chatbot thinking...")
+            
+            # Send the user's question to the chat model.
+            # The model will use the previously sent document and history for context.
+            response = chat.send_message(user_question)
+            
+            # Print the model's response
+            print("\nChatbot:", response.text)
+
+        except KeyboardInterrupt:
+            print("\nExiting chat due to user interruption.")
+            break
+        except EOFError:
+            print("\nExiting chat. End of input detected.")
+            break
+        except genai.APIError as e:
+            print(f"Gemini API Error during conversation: {e}", file=sys.stderr)
+            print("Please check your API key, network connection, or API quotas.", file=sys.stderr)
+        except Exception as e:
+            print(f"An unexpected error occurred during conversation: {e}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main().
+
+
+
+
+——-
+
+
+Please help me try and make sense of all of this

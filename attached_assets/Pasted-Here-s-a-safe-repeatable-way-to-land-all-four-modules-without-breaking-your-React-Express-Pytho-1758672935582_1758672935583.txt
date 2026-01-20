@@ -1,0 +1,212 @@
+Here’s a safe, repeatable way to land all four modules without breaking your React + Express + Python WSM app.
+
+Architectural pattern
+
+Strangler-Fig + Sidecar Services behind an Edge Façade
+
+Keep your existing React UI + Express API as the edge façade.
+
+Add each new capability as a separate backend service (sidecars):
+
+Sovereign AGI Backend (FastAPI)
+
+HP-QCC Compression (binary I/O)
+
+Advanced NLP Engine (stateless text ops)
+
+UltraAGI Orchestrator (routes/coordinates calls incl. WSM)
+
+Edge façade proxies to these services via versioned routes (/v2/*) and feature flags.
+
+Run shadow traffic (mirror) before switching users; canary by cohort; keep hard rollbacks via flags.
+
+Implementation sequence (do in order)
+
+Freeze & test the baseline
+
+Snapshot current Express routes + Python WSM service.
+
+Add health checks (GET /healthz) and smoke tests for all current endpoints.
+
+Edge façade hardening (Express)
+
+Introduce versioned proxy paths and flags:
+
+/v1/* → existing handlers (stable)
+
+/v2/agi/*, /v2/nlp/*, /v2/hpqcc/* → new services (behind flags)
+
+Add request-ID, auth (X-API-Key), timeout, and circuit-breaker middleware.
+
+Stand up Sovereign AGI Backend (FastAPI)
+
+New service (no traffic yet). Minimal contracts:
+
+POST /v2/agi/infer {prompt, context?, tools?} → {text, citations?}
+
+POST /v2/agi/wsm/solve {prompt, budget_steps?, max_seconds?, seed?} → {task_id, status, coherence, score, solution?}
+
+GET /v2/agi/wsm/status/{task_id}
+
+Wire to your existing WSM Python code internally so behavior matches v1.
+
+Shadow traffic for WSM
+
+From Express, mirror every POST /v1/wsm/solve to /v2/agi/wsm/solve (don’t return its result yet).
+
+Compare status/coherence/score server-side; log deltas. Fix gaps until parity.
+
+HP-QCC Compression service
+
+Separate FastAPI or simple Python service with binary endpoints:
+
+POST /v2/hpqcc/compress (octet-stream) → .primecomp bytes
+
+POST /v2/hpqcc/decompress (octet-stream) → raw bytes
+
+POST /v2/hpqcc/verify {orig_sha256, restored_sha256?} → {equal, size_ok}
+
+Add Express passthrough routes with --data-binary compatibility. Gate behind FEATURE_HP_QCC.
+
+Advanced NLP Engine
+
+Stateless microservice:
+
+POST /v2/nlp/analyze {text, tasks:[ner|sentiment|topics|keyphrases]} → typed annotations
+
+POST /v2/nlp/generate {instruction, inputs?, style?} → {text}
+
+Sovereign backend can call NLP for pre/post-processing; keep interface pure JSON.
+
+UltraAGI Orchestrator
+
+New service or module inside Sovereign backend that composes: WSM + NLP + HP-QCC + (optional RAG).
+
+Single high-level route:
+
+POST /v2/ultra/solve {goal, assets?, constraints?, budget?}
+→ orchestrates sub-calls, tracks coherence per step, returns {plan, artifacts, metrics}.
+
+Flip traffic gradually
+
+Add per-user/session flags in Express (X-Flags: agi=v2, nlp=v2, hpqcc=v2).
+
+Start with 1–5% to /v2/*, watch SLOs (error rate, p90 latency, timeouts), then ramp.
+
+Observability & invariants
+
+Standardize: X-Request-ID, structured logs, p50/p90/p99, throughput.
+
+Enforce invariants:
+
+No file writes outside workspace
+
+HP-QCC roundtrip verify == true before “success”
+
+Coherence floor (e.g., <0.6 → halt & re-plan)
+
+Add /metrics on each service; scrape/ship to your stack.
+
+Decommission v1 paths (optional)
+
+After stability, migrate clients to /v2/*, keep /v1/* as shims or disable via flag.
+
+Minimal wiring snippets
+
+Express façade (proxy + feature flags)
+
+// server/index.js
+const express = require('express');
+const { createProxyMiddleware } = require('http-proxy-middleware');
+const app = express();
+
+const flags = { agiV2: process.env.FEATURE_AGI_V2 === '1', nlpV2: process.env.FEATURE_NLP_V2 === '1', hpqccV2: process.env.FEATURE_HPQCC_V2 === '1' };
+const svc = {
+  agi: process.env.AGI_BASE || 'http://localhost:8001',
+  nlp: process.env.NLP_BASE || 'http://localhost:8002',
+  hpqcc: process.env.HPQCC_BASE || 'http://localhost:8003'
+};
+
+app.use((req,res,next)=>{ req.id = crypto.randomUUID(); res.set('X-Request-ID', req.id); next(); });
+
+app.post('/v1/wsm/solve', async (req,res,next)=>{
+  // existing handler…
+  if (flags.agiV2) { // shadow
+    fetch(`${svc.agi}/v2/agi/wsm/solve`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(req.body) }).catch(()=>{});
+  }
+  next();
+});
+
+app.use('/v2/agi', createProxyMiddleware({ target: svc.agi, changeOrigin: true, timeout: 15_000 }));
+app.use('/v2/nlp', createProxyMiddleware({ target: svc.nlp, changeOrigin: true, timeout: 10_000 }));
+app.use('/v2/hpqcc', createProxyMiddleware({ target: svc.hpqcc, changeOrigin: true, timeout: 60_000 }));
+
+app.listen(process.env.PORT || 3000);
+
+
+Sovereign AGI Backend (FastAPI stubs)
+
+# agi_server.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+app = FastAPI()
+
+class SolveReq(BaseModel):
+    prompt: str
+    budget_steps: int | None = 200
+    max_seconds: int | None = 20
+    seed: int | None = None
+
+@app.post("/v2/agi/wsm/solve")
+def wsm_solve(req: SolveReq):
+    # call into existing WSM lib
+    task_id = start_wsm_task(req.prompt, req.budget_steps, req.max_seconds, req.seed)
+    return status(task_id)
+
+@app.get("/v2/agi/wsm/status/{task_id}")
+def wsm_status(task_id: str):
+    return status(task_id)
+
+
+HP-QCC service (binary I/O)
+
+# hpqcc_server.py
+from fastapi import FastAPI, Request, Response
+app = FastAPI()
+
+@app.post("/v2/hpqcc/compress")
+async def compress(req: Request):
+    data = await req.body()
+    out = hpqcc_compress(data)
+    return Response(content=out, media_type="application/octet-stream")
+
+@app.post("/v2/hpqcc/decompress")
+async def decompress(req: Request):
+    data = await req.body()
+    out = hpqcc_decompress(data)
+    return Response(content=out, media_type="application/octet-stream")
+
+
+React: call v2 via feature flag
+
+// src/api.ts
+export const apiBase = import.meta.env.VITE_API_BASE ?? '';
+export const useV2 = localStorage.getItem('useV2') === '1';
+
+export async function solveWSM(prompt: string) {
+  const path = useV2 ? '/v2/agi/wsm/solve' : '/v1/wsm/solve';
+  const r = await fetch(apiBase + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ prompt }) });
+  return await r.json();
+}
+
+Testing & rollout
+
+Contract tests: Supertest (Express) + pytest (FastAPI) to assert schemas for /v1/* and /v2/*.
+
+Golden tests: Run the same prompts through v1 and v2; assert not worse p90 latency and coherence Δ within tolerance.
+
+Canary: 1% → 10% → 50% cohorts; instant rollback by flipping FEATURE_* envs.
+
+Data safety: HP-QCC roundtrip verification must pass before any pipeline reports success.
+
+That’s the exact path: façade first, services second, shadowing third, canary fourth. If you want, I can tailor the route names to your current repo and emit the diffs in ≤120-line chunks.

@@ -1,0 +1,495 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Play, RefreshCw, Activity, ShieldCheck, Zap, Settings, Loader2, TestTube2, MonitorCheck, BookOpenCheck, BrainCircuit, TriangleAlert, Gauge, Binary, Network, ArrowBigUpDash } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+
+/**
+ * AetherForge AI — Portal v2 (Single‑file React Canvas)
+ * ----------------------------------------------------
+ * Purpose
+ *   A cohesive front‑end shell for the v2 story: a portal that hosts the
+ *   Workflow Orchestrator with a real guardflow, a metrics panel, and agent cards.
+ *
+ * Back‑end contract (drop‑in when your service is ready)
+ *   POST  {BASE}/guard/answer
+ *     Body: { prompt: string, refine?: boolean, threshold?: number }
+ *     Resp: {
+ *       final_answer: string,
+ *       route: "accepted" | "fallback",
+ *       self_check: { score: number, threshold: number, explanation: string },
+ *       metrics: {
+ *         latency_ms: number, tokens_in: number, tokens_out: number, cost_usd: number,
+ *         coherence?: number, resonance?: number, entropy?: number, hallucination_rate?: number
+ *       }
+ *     }
+ *
+ *   GET   {BASE}/metrics/latest.json
+ *     Resp: a small JSON object used to animate the coherence meter and dashboard.
+ *
+ * Fail‑safe
+ *   If calls fail, the UI switches to MOCK MODE with synthetic data so you can demo live.
+ */
+
+// ---------- Utilities ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
+
+function useInterval(cb, delay) {
+  const saved = useRef(cb);
+  useEffect(() => { saved.current = cb; }, [cb]);
+  useEffect(() => {
+    if (delay == null) return;
+    const id = setInterval(() => saved.current(), delay);
+    return () => clearInterval(id);
+  }, [delay]);
+}
+
+// ---------- Mock Data Generators ----------
+function synthMetrics(prev = null) {
+  const jitter = (x, j) => clamp(x + (Math.random() * 2 - 1) * j);
+  const base = prev ?? { coherence: 72, resonance: 64, entropy: 41, p95_latency_ms: 1380, cost_usd: 0.004, tokens_in: 512, tokens_out: 220, hallucination_rate: 0.11 };
+  return {
+    ...base,
+    coherence: jitter(base.coherence, 5),
+    resonance: jitter(base.resonance, 6),
+    entropy: jitter(base.entropy, 4),
+    p95_latency_ms: Math.max(800, base.p95_latency_ms + Math.round((Math.random() * 2 - 1) * 80)),
+    cost_usd: Math.max(0.002, Number((base.cost_usd + (Math.random() * 2 - 1) * 0.0003).toFixed(4))),
+    tokens_in: Math.max(64, base.tokens_in + Math.round((Math.random() * 2 - 1) * 50)),
+    tokens_out: Math.max(64, base.tokens_out + Math.round((Math.random() * 2 - 1) * 30)),
+    hallucination_rate: Math.max(0, Number((base.hallucination_rate + (Math.random() * 2 - 1) * 0.01).toFixed(3)))
+  };
+}
+
+function synthGuardAnswer(prompt, refine = false) {
+  const baseScore = refine ? 0.84 : 0.74;
+  const score = clamp(Math.round((baseScore + (Math.random() * 0.1 - 0.05)) * 100));
+  const threshold = Math.round((refine ? 0.82 : 0.70) * 100);
+  const fallback = score < threshold;
+  const answer = fallback
+    ? `FALLBACK→ tool/RAG composed answer for: "${prompt.slice(0, 90)}"...`
+    : `Accepted answer synthesized directly for: "${prompt.slice(0, 90)}"...`;
+  return {
+    final_answer: answer,
+    route: fallback ? "fallback" : "accepted",
+    self_check: {
+      score: score / 100,
+      threshold: threshold / 100,
+      explanation: fallback
+        ? "Score below threshold — routed to retrieval/tools per policy."
+        : "Self‑check passed — direct synthesis accepted."
+    },
+    metrics: {
+      latency_ms: 850 + Math.round(Math.random() * 500),
+      tokens_in: 400 + Math.round(Math.random() * 200),
+      tokens_out: 180 + Math.round(Math.random() * 120),
+      cost_usd: Number((0.003 + Math.random() * 0.002).toFixed(4)),
+      coherence: score,
+      resonance: 60 + Math.round(Math.random() * 20),
+      entropy: 40 + Math.round(Math.random() * 10),
+      hallucination_rate: Number((0.10 + Math.random() * 0.02).toFixed(3))
+    }
+  };
+}
+
+// ---------- Tiny UI Elements ----------
+const Badge = ({ children, className = "" }) => (
+  <span className={`px-2 py-0.5 text-xs rounded-full border ${className}`}>{children}</span>
+);
+
+function Metric({ label, value, sub }) {
+  return (
+    <div className="p-3 rounded-xl border shadow-sm">
+      <div className="text-xs opacity-70">{label}</div>
+      <div className="text-xl font-semibold tabular-nums">{value}</div>
+      {sub && <div className="text-[11px] opacity-60 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function Stage({ index, title, status }) {
+  const colors = {
+    idle: "bg-zinc-200 text-zinc-700 border-zinc-300",
+    running: "bg-amber-100 text-amber-900 border-amber-300 animate-pulse",
+    completed: "bg-emerald-100 text-emerald-900 border-emerald-300",
+    failed: "bg-rose-100 text-rose-900 border-rose-300"
+  };
+  return (
+    <div className={`flex items-center gap-3 p-3 rounded-xl border ${colors[status]}`}>
+      <div className="w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[11px] font-semibold">{index}</div>
+      <div className="font-medium">{title}</div>
+      <div className="ml-auto text-xs opacity-70">{status}</div>
+    </div>
+  );
+}
+
+function CoherenceMeter({ score = 0, threshold = 70, route = "accepted" }) {
+  const pct = clamp(score);
+  const thr = clamp(threshold);
+  const above = pct >= thr;
+  return (
+    <div className="p-4 rounded-2xl border shadow-sm">
+      <div className="flex items-center gap-2 mb-2">
+        <Gauge className="w-4 h-4" />
+        <div className="font-semibold">Coherence</div>
+        <Badge className={above ? "border-emerald-300 text-emerald-700" : "border-rose-300 text-rose-700"}>
+          {above ? "PASS" : "DISSONANCE"}
+        </Badge>
+        <div className="ml-auto text-xs opacity-70">route: {route}</div>
+      </div>
+      <div className="h-3 rounded-full bg-zinc-200 overflow-hidden">
+        <div
+          className={`h-full ${above ? "bg-emerald-500" : "bg-rose-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex text-xs justify-between mt-1 opacity-70">
+        <span>score: {pct}%</span>
+        <span>threshold: {thr}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Main Component ----------
+export default function AetherForgePortalV2() {
+  const [baseUrl, setBaseUrl] = useState("");
+  const [showCfg, setShowCfg] = useState(false);
+  const [mockMode, setMockMode] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+
+  const [prompt, setPrompt] = useState("Draft a 1‑pager on the Guard architecture with claims & diagrams.");
+  const [isRunning, setIsRunning] = useState(false);
+  const [route, setRoute] = useState("accepted");
+  const [score, setScore] = useState(0);
+  const [threshold, setThreshold] = useState(70);
+  const [finalAnswer, setFinalAnswer] = useState("");
+  const [explanation, setExplanation] = useState("");
+
+  const [stages, setStages] = useState([
+    { title: "Intent Capture", status: "idle" },
+    { title: "Decompose / Entangle", status: "idle" },
+    { title: "Parallel Explore", status: "idle" },
+    { title: "Coherence Gate", status: "idle" },
+    { title: "Synthesis & Refine", status: "idle" }
+  ]);
+
+  const [metrics, setMetrics] = useState(synthMetrics());
+  const [kb, setKb] = useState([
+    { ts: new Date().toLocaleTimeString(), text: "Welcome to AetherForge Portal v2 — MOCK MODE active." }
+  ]);
+
+  const connected = !mockMode && !!baseUrl;
+
+  // --- Events persistence helpers (v2.1) ---
+  const baseUrlClean = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
+
+  const persistEvent = async (text, level = 'info', extra = {}) => {
+    if (mockMode || !baseUrlClean) return;
+    try {
+      await fetch(`${baseUrlClean}/events/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, level, ...extra })
+      });
+    } catch (_) { /* non-fatal */ }
+  };
+
+  const hydrateKB = async () => {
+    if (mockMode || !baseUrlClean) return;
+    try {
+      const hist = await fetch(`${baseUrlClean}/events/recent?limit=12`).then(r => r.json());
+      setKb(hist.map(e => ({ ts: new Date(e.ts).toLocaleTimeString(), text: e.text })));
+    } catch (_) { /* ignore */ }
+  };
+
+  // Poll metrics
+  useInterval(async () => {
+    if (!baseUrl || mockMode) {
+      setMetrics((m) => synthMetrics(m));
+      return;
+    }
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/$/, "")}/metrics/latest.json`);
+      if (!r.ok) throw new Error("metrics fetch failed");
+      const j = await r.json();
+      setMetrics((m) => ({ ...m, ...j }));
+    } catch (e) {
+      setMockMode(true);
+      setKb((k) => [{ ts: new Date().toLocaleTimeString(), text: `Metrics offline — switching to MOCK MODE (${e.message}).` }, ...k].slice(0, 12));
+      persistEvent(`Metrics offline — switching to MOCK MODE (${e.message}).`, 'warn');
+    }
+  }, 2000);
+
+  // Attempt connection toggle
+  const tryConnect = async () => {
+    if (!baseUrl) { setShowCfg(true); return; }
+    setConnecting(true);
+    try {
+      // light ping via metrics
+      const r = await fetch(`${baseUrl.replace(/\/$/, "")}/metrics/latest.json`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setMockMode(false);
+      await hydrateKB();
+      setKb((k) => [{ ts: new Date().toLocaleTimeString(), text: `Connected to ${baseUrl}` }, ...k].slice(0, 12));
+      persistEvent(`Connected to ${baseUrl}`);
+    } catch (e) {
+      setMockMode(true);
+      setKb((k) => [{ ts: new Date().toLocaleTimeString(), text: `Connect failed (${e.message}) — staying in MOCK MODE.` }, ...k].slice(0, 12));
+      persistEvent(`Connect failed (${e.message}) — staying in MOCK MODE.`, 'warn');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const runWorkflow = async (refine = false) => {
+    if (isRunning) return;
+    setIsRunning(true);
+    setFinalAnswer("");
+    setExplanation("");
+    setStages((s) => s.map((st, i) => ({ ...st, status: i === 0 ? "running" : "idle" })));
+
+    // Simulate staged progress
+    const bumpStage = (idx, status) => setStages((s) => s.map((st, i) => i === idx ? { ...st, status } : st));
+
+    try {
+      bumpStage(0, "completed");
+      bumpStage(1, "running");
+      await sleep(250);
+      bumpStage(1, "completed");
+      bumpStage(2, "running");
+      await sleep(250);
+      bumpStage(2, "completed");
+      bumpStage(3, "running");
+
+      const body = { prompt, refine, threshold: refine ? 0.85 : 0.70 };
+      let out;
+      if (mockMode || !baseUrl) {
+        out = synthGuardAnswer(prompt, refine);
+      } else {
+        const r = await fetch(`${baseUrl.replace(/\/$/, "")}/guard/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        out = await r.json();
+      }
+
+      const sPct = Math.round((out.self_check.score ?? 0) * 100);
+      const thr = Math.round((out.self_check.threshold ?? (refine ? 0.85 : 0.70)) * 100);
+      setScore(sPct);
+      setThreshold(thr);
+      setRoute(out.route);
+      setExplanation(out.self_check.explanation || "");
+
+      bumpStage(3, sPct >= thr ? "completed" : "failed");
+      bumpStage(4, "running");
+      await sleep(250);
+      setFinalAnswer(out.final_answer);
+      bumpStage(4, "completed");
+
+      // Merge metrics
+      setMetrics((m) => ({
+        ...m,
+        coherence: sPct,
+        resonance: out.metrics?.resonance ?? m.resonance,
+        entropy: out.metrics?.entropy ?? m.entropy,
+        p95_latency_ms: out.metrics?.latency_ms ?? m.p95_latency_ms,
+        cost_usd: out.metrics?.cost_usd ?? m.cost_usd,
+        tokens_in: out.metrics?.tokens_in ?? m.tokens_in,
+        tokens_out: out.metrics?.tokens_out ?? m.tokens_out,
+        hallucination_rate: out.metrics?.hallucination_rate ?? m.hallucination_rate,
+      }));
+
+      setKb((k) => [
+        { ts: new Date().toLocaleTimeString(), text: `${out.route.toUpperCase()} — ${out.self_check.explanation}` },
+        ...k
+      ].slice(0, 12));
+      persistEvent(`${out.route.toUpperCase()} — ${out.self_check.explanation}`, out.route === 'fallback' ? 'warn' : 'info', { route: out.route, score: sPct, threshold: thr });
+
+    } catch (e) {
+      setRoute("fallback");
+      setScore(30);
+      setThreshold(80);
+      bumpStage(3, "failed");
+      bumpStage(4, "running");
+      await sleep(250);
+      setFinalAnswer(`Workflow error: ${e.message}. Check tokens, CORS, or base URL.`);
+      bumpStage(4, "completed");
+      setKb((k) => [{ ts: new Date().toLocaleTimeString(), text: `Route failure: ${e.message}` }, ...k].slice(0, 12));
+      persistEvent(`Route failure: ${e.message}`, 'error');
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  // Agent panels (simple echoes for now)
+  const agents = [
+    { name: "App Synthesizer", icon: <MonitorCheck className="w-4 h-4"/>, key: "synth" },
+    { name: "Strategic Planner", icon: <BookOpenCheck className="w-4 h-4"/>, key: "plan" },
+    { name: "Creative Modulator", icon: <BrainCircuit className="w-4 h-4"/>, key: "crea" }
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-zinc-50 to-white text-zinc-900">
+      {/* Header */}
+      <div className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-white/70 bg-white/50 border-b">
+        <div className="mx-auto max-w-7xl px-5 py-3 flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-black text-white flex items-center justify-center"><ShieldCheck className="w-5 h-5"/></div>
+            <div>
+              <div className="font-bold leading-none">AetherForge AI — Portal v2</div>
+              <div className="text-[11px] opacity-60">Workflow Orchestrator · Guardflow · Metrics</div>
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {connected ? (
+              <Badge className="border-emerald-300 text-emerald-700">CONNECTED</Badge>
+            ) : (
+              <Badge className="border-amber-300 text-amber-700">MOCK MODE</Badge>
+            )}
+            <button onClick={() => setShowCfg((v) => !v)} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border shadow-sm hover:shadow transition">
+              <Settings className="w-4 h-4"/> Configure
+            </button>
+            <button onClick={tryConnect} disabled={connecting} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border shadow-sm hover:shadow transition">
+              {connecting ? <Loader2 className="w-4 h-4 animate-spin"/> : <Network className="w-4 h-4"/>}
+              {connected ? "Recheck" : "Connect"}
+            </button>
+          </div>
+        </div>
+        <AnimatePresence>
+          {showCfg && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="border-t">
+              <div className="mx-auto max-w-7xl px-5 py-3 flex items-center gap-2">
+                <div className="text-xs opacity-70">Backend Base URL</div>
+                <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:5050" className="flex-1 px-3 py-2 rounded-xl border focus:outline-none" />
+                <div className="flex items-center gap-2">
+                  <label className="text-xs flex items-center gap-1 cursor-pointer select-none">
+                    <input type="checkbox" checked={mockMode} onChange={() => setMockMode((m) => !m)} />
+                    Use Mock Data
+                  </label>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Content */}
+      <div className="mx-auto max-w-7xl px-5 py-6 grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Orchestrator Card */}
+        <motion.div layout className="lg:col-span-2 p-5 rounded-2xl border shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <Activity className="w-4 h-4"/>
+            <div className="font-semibold">Workflow Orchestrator v2</div>
+            <div className="ml-auto flex items-center gap-2">
+              <Badge className="border-zinc-300">Route: {route}</Badge>
+              <Badge className="border-zinc-300">Threshold: {threshold}%</Badge>
+            </div>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <input
+              className="flex-1 px-4 py-3 rounded-xl border focus:outline-none"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Describe your task…"
+            />
+            <button
+              onClick={() => runWorkflow(false)}
+              disabled={isRunning}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border shadow-sm hover:shadow transition"
+            >
+              {isRunning ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4"/>}
+              Start
+            </button>
+            <button
+              onClick={() => runWorkflow(true)}
+              disabled={isRunning}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border shadow-sm hover:shadow transition"
+            >
+              <RefreshCw className="w-4 h-4"/>
+              Refine
+            </button>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              {stages.map((s, i) => (
+                <Stage key={i} index={i + 1} title={s.title} status={s.status} />
+              ))}
+            </div>
+            <div className="space-y-3">
+              <CoherenceMeter score={score} threshold={threshold} route={route} />
+              <div className="p-4 rounded-2xl border shadow-sm">
+                <div className="flex items-center gap-2 mb-2"><Binary className="w-4 h-4"/> <div className="font-semibold">Self‑check</div></div>
+                <div className="text-sm opacity-80">{explanation || "The self‑check explanation will appear here after a run."}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 p-4 rounded-2xl border shadow-sm bg-gradient-to-br from-zinc-50 to-white">
+            <div className="flex items-center gap-2 mb-2"><ShieldCheck className="w-4 h-4"/> <div className="font-semibold">Final Output</div></div>
+            <pre className="whitespace-pre-wrap text-sm leading-relaxed">{finalAnswer || "Run a task to see output here."}</pre>
+          </div>
+        </motion.div>
+
+        {/* Metrics Card */}
+        <motion.div layout className="p-5 rounded-2xl border shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <Gauge className="w-4 h-4"/>
+            <div className="font-semibold">Live Metrics</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="Coherence" value={`${Math.round(metrics.coherence ?? 0)}%`} sub="↑ is good" />
+            <Metric label="Resonance" value={`${Math.round(metrics.resonance ?? 0)}%`} />
+            <Metric label="Entropy" value={`${Math.round(metrics.entropy ?? 0)}%`} />
+            <Metric label="p95 Latency" value={`${Math.round(metrics.p95_latency_ms ?? 0)} ms`} />
+            <Metric label="Cost / run" value={`$${(metrics.cost_usd ?? 0).toFixed?.(4) || metrics.cost_usd}`} />
+            <Metric label="Tokens (in/out)" value={`${metrics.tokens_in ?? 0} / ${metrics.tokens_out ?? 0}`} />
+            <Metric label="Truth‑trap" value={`${(metrics.hallucination_rate ?? 0).toFixed?.(3) || metrics.hallucination_rate}`} sub="hallucination rate" />
+          </div>
+          <div className="mt-3 text-[11px] opacity-70">
+            Wired for {baseUrl ? <span className="font-mono">{baseUrl}</span> : "mocked stream"}. Set a base URL and press Connect to go live.
+          </div>
+        </motion.div>
+
+        {/* Agents */}
+        <motion.div layout className="lg:col-span-3 p-5 rounded-2xl border shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="w-4 h-4"/>
+            <div className="font-semibold">Agents</div>
+          </div>
+          <div className="grid md:grid-cols-3 gap-4">
+            {agents.map((a) => (
+              <div key={a.key} className="p-4 rounded-2xl border shadow-sm">
+                <div className="flex items-center gap-2 mb-2">{a.icon} <div className="font-semibold">{a.name}</div></div>
+                <div className="text-sm opacity-70">Outputs will summarize their contribution after a run.</div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+
+        {/* Knowledge Base */}
+        <motion.div layout className="lg:col-span-3 p-5 rounded-2xl border shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <BookOpenCheck className="w-4 h-4"/>
+            <div className="font-semibold">Knowledge Base & Events</div>
+          </div>
+          <div className="grid gap-2 max-h-64 overflow-auto pr-2">
+            {kb.map((row, i) => (
+              <div key={i} className="text-sm flex items-start gap-3">
+                <span className="text-[11px] opacity-60 tabular-nums mt-0.5 w-16">{row.ts}</span>
+                <span>{row.text}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Footer */}
+      <div className="mx-auto max-w-7xl px-5 pb-8 text-[11px] opacity-60">
+        <div>v2 Portal shell · This UI auto‑switches between LIVE and MOCK flows for resilient demos.</div>
+      </div>
+    </div>
+  );
+}

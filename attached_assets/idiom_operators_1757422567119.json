@@ -1,0 +1,62 @@
+{
+  "measure twice cut once": {
+    "type": "constraint",
+    "macro": "verify_twice_before(cut)",
+    "lambda": 3.0,
+    "doc": {
+      "Pi_twice": "\u03a0_twice = \u03a3_{x\u2208states} |x, checks=2\u27e9\u27e8x, checks=2|",
+      "H": "H_mtco = \u03bb \u00b7 (I - \u03a0_twice) \u00b7 \u03a0_cut"
+    }
+  },
+  "a stitch in time saves nine": {
+    "type": "cost",
+    "macro": "early_fix(beta=0.6, alpha=1.0)",
+    "alpha": 1.0,
+    "beta": 0.6,
+    "doc": {
+      "H": "H_delay = \u03a3_{t\u22650} \u03b1 e^{\u03b2 t} \u00b7 \u03a0_{bug-unfixed@t}"
+    }
+  },
+  "the squeaky wheel gets the grease": {
+    "type": "priority",
+    "macro": "boost_closure_by(signal=c)",
+    "gamma": 0.8,
+    "doc": {
+      "W": "W_squeak = I + \u03b3 \u00b7 diag(c_1, c_2, \u2026)"
+    }
+  },
+  "dont reinvent the wheel": {
+    "type": "penalty",
+    "macro": "duplicate_penalty(mu=2.0)",
+    "mu": 2.0,
+    "doc": {
+      "H": "H_dup = \u03bc \u00b7 \u03a0_dup"
+    }
+  },
+  "solve two goals with one step": {
+    "type": "merge",
+    "macro": "merge_if_commute(A,B,eta=1.0)",
+    "eta": 1.0,
+    "doc": {
+      "J": "J_merge: (A,B)\u21a6A\u2218B=B\u2218A",
+      "H": "H_multi = -\u03b7 \u00b7 \u03a0_{goalA\u2227goalB}"
+    }
+  },
+  "garbage in garbage out": {
+    "type": "trust",
+    "macro": "quality_weight(kappa=1.0)",
+    "kappa": 1.0,
+    "doc": {
+      "H": "H_gigo = \u03ba\u00b7(I - q)",
+      "W": "W_trust = diag(q)"
+    }
+  },
+  "keep it simple": {
+    "type": "simplicity",
+    "macro": "complexity_linear(rho=0.5)",
+    "rho": 0.5,
+    "doc": {
+      "H": "H_simplicity = \u03c1 \u00b7 K"
+    }
+  }
+}

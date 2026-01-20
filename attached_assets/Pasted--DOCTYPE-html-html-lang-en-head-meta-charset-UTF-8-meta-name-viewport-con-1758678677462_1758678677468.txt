@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harmonic Unification Stack (HUS)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            /* background-color is now handled by the canvas */
+            color: #1e293b;
+            /* Added text-shadow for readability */
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        #living-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: -1; /* Place it behind all content */
+            width: 100%;
+            height: 100%;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.75); /* Slightly increased opacity */
+            backdrop-filter: blur(12px); /* Slightly increased blur */
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .tagline-gradient {
+            background: linear-gradient(45deg, #10b981, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .icon-wrapper {
+            background: linear-gradient(135deg, #e0f2fe, #d1fae5);
+        }
+        .btn-primary {
+            background: linear-gradient(45deg, #10b981, #2563eb);
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        }
+        .section-title {
+            border-bottom: 2px solid #10b981;
+            padding-bottom: 0.5rem;
+        }
+        [x-cloak] { display: none; }
+    </style>
+</head>
+<body class="antialiased">
+    <canvas id="living-background"></canvas>
+    <div x-data="{ activeTab: 'overview', commandPaletteOpen: false, pwaBuilderOpen: false, pwaName: 'My HUS Simulation' }" class="min-h-screen">
+        <!-- Header -->
+        <header class="sticky top-0 z-30 glass-card shadow-sm">
+            <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex items-center justify-between h-16">
+                    <div class="flex items-center">
+                        <div class="icon-wrapper p-2 rounded-full">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-600"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                        </div>
+                        <span class="ml-3 text-xl font-bold text-slate-800">Harmonic Unification Stack</span>
+                    </div>
+                    <nav class="hidden md:flex space-x-8">
+                        <a href="#" @click.prevent="activeTab = 'overview'" :class="{'text-emerald-600 border-b-2 border-emerald-600': activeTab === 'overview'}" class="font-medium text-slate-600 hover:text-emerald-600 transition-colors">Overview</a>
+                        <a href="#" @click.prevent="activeTab = 'architecture'" :class="{'text-emerald-600 border-b-2 border-emerald-600': activeTab === 'architecture'}" class="font-medium text-slate-600 hover:text-emerald-600 transition-colors">Architecture</a>
+                        <a href="#" @click.prevent="activeTab = 'safety'" :class="{'text-emerald-600 border-b-2 border-emerald-600': activeTab === 'safety'}" class="font-medium text-slate-600 hover:text-emerald-600 transition-colors">Safety</a>
+                        <a href="#" @click.prevent="activeTab = 'demo'" :class="{'text-emerald-600 border-b-2 border-emerald-600': activeTab === 'demo'}" class="font-medium text-slate-600 hover:text-emerald-600 transition-colors">Demo Plan</a>
+                    </nav>
+                    <button @click="commandPaletteOpen = true" class="hidden md:flex items-center space-x-2 px-3 py-2 rounded-md border border-slate-300 text-slate-500 hover:bg-slate-100 transition">
+                        <i data-lucide="command" class="w-4 h-4"></i>
+                        <span>Palette</span>
+                        <kbd class="ml-2 text-xs font-sans font-semibold">⌘K</kbd>
+                    </button>
+                    <div class="md:hidden">
+                        <!-- Mobile menu button can be added here -->
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="container mx-auto p-4 sm:p-6 lg:p-8">
+            <!-- Overview Section -->
+            <section x-show="activeTab === 'overview'" x-transition>
+                <div class="text-center py-16">
+                    <h1 class="text-4xl md:text-6xl font-extrabold tracking-tighter mb-4">
+                        <span class="tagline-gradient">Harmonic Unification Stack</span>
+                    </h1>
+                    <p class="text-xl md:text-2xl text-slate-600 max-w-3xl mx-auto">
+                        One stack to compose and reason about worlds—visual, physical, and biological—safely and interactively.
+                    </p>
+                    <div class="mt-8 flex justify-center gap-4">
+                        <button @click="activeTab = 'architecture'" class="btn-primary text-white font-semibold py-3 px-6 rounded-lg">Explore Architecture</button>
+                        <button @click="activeTab = 'demo'" class="bg-white text-slate-700 font-semibold py-3 px-6 rounded-lg border border-slate-300 hover:bg-slate-50 transition">View Demo Plan</button>
+                    </div>
+                </div>
+                <div class="grid md:grid-cols-3 gap-8 mt-16">
+                    <div class="glass-card p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                        <div class="flex items-center gap-4">
+                            <div class="icon-wrapper p-3 rounded-full"><i data-lucide="lightbulb" class="text-emerald-600"></i></div>
+                            <h3 class="text-lg font-semibold text-slate-800">Intent-Driven</h3>
+                        </div>
+                        <p class="mt-3 text-slate-600">Describe outcomes in natural language; the AI core composes the necessary steps in a sandboxed environment.</p>
+                    </div>
+                    <div class="glass-card p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                        <div class="flex items-center gap-4">
+                            <div class="icon-wrapper p-3 rounded-full"><i data-lucide="shield-check" class="text-emerald-600"></i></div>
+                            <h3 class="text-lg font-semibold text-slate-800">Safety First</h3>
+                        </div>
+                        <p class="mt-3 text-slate-600">Guardrails, rate limits, and safety-preserving operators are built-in. All demos are simulation-only.</p>
+                    </div>
+                    <div class="glass-card p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                        <div class="flex items-center gap-4">
+                            <div class="icon-wrapper p-3 rounded-full"><i data-lucide="share-2" class="text-emerald-600"></i></div>
+                            <h3 class="text-lg font-semibold text-slate-800">Shareable Worlds</h3>
+                        </div>
+                        <p class="mt-3 text-slate-600">Save, load, and share any scene. Export creations as installable Progressive Web Apps (PWAs).</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Architecture Section -->
+            <section x-show="activeTab === 'architecture'" x-cloak x-transition>
+                <h2 class="text-3xl font-bold text-slate-800 mb-2 section-title">Architecture Layers</h2>
+                <p class="text-slate-600 mb-8">The HUS is built on a coherent set of layers, from interface to data.</p>
+                <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <!-- Architecture cards will be injected here by JS -->
+                </div>
+            </section>
+
+            <!-- Safety Section -->
+            <section x-show="activeTab === 'safety'" x-cloak x-transition>
+                <h2 class="text-3xl font-bold text-slate-800 mb-2 section-title">Safety Doctrine</h2>
+                <p class="text-slate-600 mb-8">Our commitment to safe and ethical simulation is paramount.</p>
+                <div class="space-y-6">
+                    <div class="glass-card p-6 rounded-lg shadow-sm border-l-4 border-red-500">
+                        <h3 class="font-semibold text-lg flex items-center gap-2"><i data-lucide="monitor-off" class="w-5 h-5 text-red-500"></i>Simulation-Only</h3>
+                        <p class="text-slate-600 mt-2">The stack has no device control capabilities and cannot execute real-world procedures. It is a pure simulation environment.</p>
+                    </div>
+                    <div class="glass-card p-6 rounded-lg shadow-sm border-l-4 border-yellow-500">
+                        <h3 class="font-semibold text-lg flex items-center gap-2"><i data-lucide="shield" class="w-5 h-5 text-yellow-500"></i>Guardrails by Default</h3>
+                        <p class="text-slate-600 mt-2">We ship with built-in caps, bounds, filters, and rate limits to ensure stable and predictable simulations.</p>
+                    </div>
+                    <div class="glass-card p-6 rounded-lg shadow-sm border-l-4 border-blue-500">
+                        <h3 class="font-semibold text-lg flex items-center gap-2"><i data-lucide="eye-off" class="w-5 h-5 text-blue-500"></i>Read-Only Demos</h3>
+                        <p class="text-slate-600 mt-2">Demos assume a read-only mode (`SIM_DEMO_ONLY=true`). Nothing shown can cause real-world harm or alter persistent state.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Demo Plan Section -->
+            <section x-show="activeTab === 'demo'" x-cloak x-transition>
+                <h2 class="text-3xl font-bold text-slate-800 mb-2 section-title">Demo Plan (10-12 minutes)</h2>
+                <p class="text-slate-600 mb-8">Showcasing value in 3 beats: intent → safe action → shareable output.</p>
+                <div class="relative border-l-2 border-slate-200 ml-4">
+                    <!-- Timeline items will be injected here by JS -->
+                </div>
+                <div class="mt-8 flex justify-center">
+                    <button @click="pwaBuilderOpen = true" class="btn-primary text-white font-semibold py-3 px-6 rounded-lg flex items-center gap-2">
+                        <i data-lucide="box" class="w-5 h-5"></i>
+                        Simulate PWA Builder
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Command Palette Modal -->
+        <div x-show="commandPaletteOpen" x-cloak class="fixed inset-0 z-50 flex items-start justify-center pt-16" @keydown.escape.window="commandPaletteOpen = false">
+            <div @click="commandPaletteOpen = false" class="absolute inset-0 bg-black/50"></div>
+            <div class="relative w-full max-w-lg bg-white rounded-lg shadow-xl" @click.away="commandPaletteOpen = false">
+                <div class="p-2 border-b">
+                    <input type="text" placeholder="Run any capability or template..." class="w-full px-2 py-2 text-lg outline-none">
+                </div>
+                <ul class="p-2 max-h-80 overflow-y-auto">
+                    <li class="px-3 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded-md cursor-pointer">Template: Gentle Harmony</li>
+                    <li class="px-3 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded-md cursor-pointer">Template: Circle Dance</li>
+                    <li class="px-3 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded-md cursor-pointer">Export Snapshot (JSON)</li>
+                    <li class="px-3 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded-md cursor-pointer" @click="pwaBuilderOpen = true; commandPaletteOpen = false">Open PWA Builder</li>
+                    <li class="px-3 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded-md cursor-pointer">Toggle Kill Switch</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- PWA Builder Modal -->
+        <div x-show="pwaBuilderOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center" @keydown.escape.window="pwaBuilderOpen = false">
+            <div @click="pwaBuilderOpen = false" class="absolute inset-0 bg-black/50"></div>
+            <div class="relative w-full max-w-md bg-white rounded-lg shadow-xl p-6" @click.away="pwaBuilderOpen = false">
+                <h3 class="text-xl font-semibold text-slate-800 mb-4">PWA Builder</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label for="pwa-name" class="block text-sm font-medium text-slate-700">App Name</label>
+                        <input type="text" id="pwa-name" x-model="pwaName" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm p-2">
+                    </div>
+                    <div>
+                        <label for="pwa-theme" class="block text-sm font-medium text-slate-700">Theme Color</label>
+                        <input type="color" id="pwa-theme" value="#10b981" class="mt-1 block w-full h-10 rounded-md border-slate-300 shadow-sm">
+                    </div>
+                </div>
+                <div class="mt-6 flex justify-end gap-3">
+                    <button @click="pwaBuilderOpen = false" class="bg-white text-slate-700 font-semibold py-2 px-4 rounded-lg border border-slate-300 hover:bg-slate-50 transition">Cancel</button>
+                    <button @click="pwaBuilderOpen = false" class="btn-primary text-white font-semibold py-2 px-4 rounded-lg flex items-center gap-2">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        Build Zip
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            lucide.createIcons();
+            
+            // --- Living Background Animation ---
+            const canvas = document.getElementById('living-background');
+            const ctx = canvas.getContext('2d');
+            let particlesArray;
+
+            // get mouse position
+            const mouse = {
+                x: null,
+                y: null,
+                radius: (canvas.height/100) * (canvas.width/100)
+            }
+
+            window.addEventListener('mousemove', function(event) {
+                mouse.x = event.x;
+                mouse.y = event.y;
+            });
+
+            // Particle class
+            class Particle {
+                constructor(x, y, directionX, directionY, size, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.directionX = directionX;
+                    this.directionY = directionY;
+                    this.size = size;
+                    this.color = color;
+                }
+                draw() {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2, false);
+                    ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+                    ctx.fill();
+                }
+                update() {
+                    if (this.x > canvas.width || this.x < 0) {
+                        this.directionX = -this.directionX;
+                    }
+                    if (this.y > canvas.height || this.y < 0) {
+                        this.directionY = -this.directionY;
+                    }
+
+                    // check collision detection - mouse
+                    let dx = mouse.x - this.x;
+                    let dy = mouse.y - this.y;
+                    let distance = Math.sqrt(dx*dx + dy*dy);
+                    if (distance < mouse.radius + this.size){
+                        if(mouse.x < this.x && this.x < canvas.width - this.size * 10) {
+                            this.x += 5;
+                        }
+                        if(mouse.x > this.x && this.x > this.size * 10) {
+                            this.x -= 5;
+                        }
+                        if(mouse.y < this.y && this.y < canvas.height - this.size * 10) {
+                            this.y += 5;
+                        }
+                        if(mouse.y > this.y && this.y > this.size * 10) {
+                            this.y -= 5;
+                        }
+                    }
+                    this.x += this.directionX;
+                    this.y += this.directionY;
+                    this.draw();
+                }
+            }
+            
+            function init() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                mouse.radius = (canvas.height/100) * (canvas.width/100);
+                particlesArray = [];
+                let numberOfParticles = (canvas.height * canvas.width) / 9000;
+                for (let i = 0; i < numberOfParticles; i++) {
+                    let size = (Math.random() * 3) + 1;
+                    let x = (Math.random() * ((innerWidth - size * 2) - (size * 2)) + size * 2);
+                    let y = (Math.random() * ((innerHeight - size * 2) - (size * 2)) + size * 2);
+                    let directionX = (Math.random() * .4) - 0.2;
+                    let directionY = (Math.random() * .4) - 0.2;
+                    let color = '#8C5523';
+                    particlesArray.push(new Particle(x, y, directionX, directionY, size, color));
+                }
+            }
+
+            function connect() {
+                let opacityValue = 1;
+                for (let a = 0; a < particlesArray.length; a++) {
+                    for (let b = a; b < particlesArray.length; b++) {
+                        let distance = ((particlesArray[a].x - particlesArray[b].x) * (particlesArray[a].x - particlesArray[b].x))
+                                     + ((particlesArray[a].y - particlesArray[b].y) * (particlesArray[a].y - particlesArray[b].y));
+                        if (distance < (canvas.width/7) * (canvas.height/7)) {
+                            opacityValue = 1 - (distance/20000);
+                            ctx.strokeStyle = `rgba(59, 130, 246, ${opacityValue * 0.3})`;
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(particlesArray[a].x, particlesArray[a].y);
+                            ctx.lineTo(particlesArray[b].x, particlesArray[b].y);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            function animate() {
+                requestAnimationFrame(animate);
+                ctx.clearRect(0, 0, innerWidth, innerHeight);
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                for (let i = 0; i < particlesArray.length; i++) {
+                    particlesArray[i].update();
+                }
+                connect();
+            }
+
+            window.addEventListener('resize', function() {
+                init();
+            });
+            
+            init();
+            animate();
+            // --- End Living Background Animation ---
+
+
+            const architectureData = [
+                { title: 'Interface / World Builder', plain: 'The UI where you state intent, place things, and control scenes.', hook: '“Point‑and‑think authoring: tell it the outcome, it composes the steps.”', icon: 'mouse-pointer-click' },
+                { title: 'Photoreal Engine', plain: 'Real‑time rendering that matches the look of reality closely enough for intuition to transfer.', hook: '“If it looks real, you reason faster.”', icon: 'camera' },
+                { title: 'Physics Engine', plain: 'Deterministic, stable rigid‑body sim with guardrails (fixed timestep, sub‑stepping, velocity caps).', hook: '“Bulletproof physics—fun, not fragile.”', icon: 'box' },
+                { title: 'Bio Engine (multi-scale)', plain: 'A simulation façade that maps physiological states to visuals and behavior.', hook: '“From heart rate to hologram: see physiology as geometry and motion.”', icon: 'heart-pulse' },
+                { title: 'AI Core', plain: 'Planning/orchestration that turns natural‑language intent into safe scene actions; learns preferences.', hook: '“Intent → plan → sandboxed execution.”', icon: 'cpu' },
+                { title: 'Data / Compression', plain: 'Formats for state, scenarios, and deltas so everything saves, loads, and transmits fast.', hook: '“Scenes are data, not one‑off demos.”', icon: 'database' },
+                 { title: 'Self‑Recursive Meta‑Learning', plain: 'The system observes how you build, then refactors its own toolbelt and defaults.', hook: '“The more you create, the better your tools get.”', icon: 'repeat' }
+            ];
+
+            const demoPlanData = [
+                { time: '0:00', title: 'Cold Open', description: '“I’ll create a small world with words. This is simulation‑only; everything runs in a sandbox.”', icon: 'play-circle' },
+                { time: '0:45', title: 'Intent → Composed Scene', description: 'Open Adaptive Hub. Intent: “make a triangle of three entities in a softly lit room.”', icon: 'edit-3' },
+                { time: '2:30', title: 'Live Editing (Bio-overlay)', description: 'Select an entity, slide neuro-transmitter values, and see visual changes. “Metrics drive visuals...”', icon: 'sliders-horizontal' },
+                { time: '4:30', title: 'Physics Credibility', description: 'Drop boxes and a sphere. Show how caps prevent tunneling. “Stability over spectacle...”', icon: 'move' },
+                { time: '6:00', title: 'Mode Switch & Discovery', description: 'Flip to Builder mode. Show the Command Palette (⌘K) and apply a new template.', icon: 'switch-camera' },
+                { time: '7:30', title: 'Save & Share', description: 'Export a snapshot (JSON) and open the PWA builder. “Any scene can be installed...in seconds.”', icon: 'share-2' },
+                { time: '9:00', title: 'Safety/Ethics', description: 'Toggle the Kill Switch. Attempt an update, which the server refuses. “We demo in read-only...”', icon: 'shield-off' },
+                { time: '10:30', title: 'Closing', description: 'Recap in one line. Invite Q&A. Keep the scene running as a “living background.”', icon: 'check-circle' }
+            ];
+
+            const archContainer = document.querySelector('section[x-show="activeTab === \'architecture\'"] .grid');
+            architectureData.forEach(item => {
+                const card = `
+                    <div class="glass-card p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow transform hover:-translate-y-1 cursor-pointer">
+                        <div class="flex items-center gap-4 mb-3">
+                            <div class="icon-wrapper p-3 rounded-full"><i data-lucide="${item.icon}" class="text-emerald-600"></i></div>
+                            <h3 class="text-lg font-semibold text-slate-800">${item.title}</h3>
+                        </div>
+                        <p class="text-slate-600 text-sm mb-2">${item.plain}</p>
+                        <p class="text-emerald-700 font-medium text-sm italic">${item.hook}</p>
+                    </div>
+                `;
+                archContainer.innerHTML += card;
+            });
+
+            const demoContainer = document.querySelector('section[x-show="activeTab === \'demo\'"] .relative');
+            demoPlanData.forEach(item => {
+                const timelineItem = `
+                    <div class="mb-8 flex items-center w-full">
+                        <div class="z-10 flex items-center justify-center w-8 h-8 bg-emerald-500 rounded-full ring-4 ring-white">
+                            <i data-lucide="${item.icon}" class="w-4 h-4 text-white"></i>
+                        </div>
+                        <div class="ml-4 flex-1">
+                            <div class="glass-card p-4 rounded-lg shadow-sm">
+                                <div class="flex justify-between items-center">
+                                    <h4 class="font-semibold text-slate-800">${item.title}</h4>
+                                    <span class="text-xs font-medium text-slate-500 bg-slate-100/70 px-2 py-1 rounded-full">${item.time}</span>
+                                </div>
+                                <p class="text-sm text-slate-600 mt-2">${item.description}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                demoContainer.innerHTML += timelineItem;
+            });
+
+            // Re-run lucide after dynamic content injection
+            lucide.createIcons();
+
+            // Keyboard shortcut for command palette
+            window.addEventListener('keydown', (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                    e.preventDefault();
+                    const alpineComponent = document.querySelector('[x-data]').__x;
+                    alpineComponent.commandPaletteOpen = !alpineComponent.commandPaletteOpen;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

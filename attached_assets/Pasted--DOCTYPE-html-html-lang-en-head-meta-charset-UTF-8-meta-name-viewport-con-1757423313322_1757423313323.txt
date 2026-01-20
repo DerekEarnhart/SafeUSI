@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harmonic-Quantum AGI Chat Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.firebase = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, doc, getDoc, setDoc
+        };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #1a1a2e; color: #e0e0e0; }
+        .section-card { background-color: #1f1f38; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); border: 1px solid #2a2a4a; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1f1f38; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4a4a6e; border-radius: 10px; }
+        .chart-canvas-container { position: relative; height: 220px; width: 100%; }
+        canvas { background-color: #1a1a2e; border-radius: 0.5rem; }
+        .modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background-color: #1f1f38; padding: 2rem; border-radius: 0.75rem; border: 1px solid #2a2a4a; width: 90%; max-width: 500px; }
+        .code-canvas { background-color: #0f0f1f; border: 1px solid #2a2a4a; border-radius: 0.5rem; padding: 1rem; font-family: monospace; font-size: 0.875rem; white-space: pre-wrap; word-wrap: break-word; }
+        .toggle { position: relative; display: inline-block; width: 2.75rem; height: 1.5rem; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #4b5563; transition: .4s; border-radius: 1.5rem; }
+        .toggle-slider:before { position: absolute; content: ""; height: 1.25rem; width: 1.25rem; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .toggle-slider { background-color: #8b5cf6; }
+        input:checked + .toggle-slider:before { transform: translateX(1.25rem); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, doc, getDoc, setDoc } = window.firebase;
+
+        let firebaseDbInstance = null;
+        let firebaseAuthInstance = null;
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- UI Components ---
+
+        function CustomModal({ title, message, inputLabel, onConfirm, onCancel, showInput = false, confirmText = "Confirm" }) {
+            const [inputValue, setInputValue] = useState('');
+            return (
+                <div className="modal-backdrop">
+                    <div className="modal-content">
+                        <h3 className="text-xl font-bold text-white mb-4">{title}</h3>
+                        <p className="text-gray-300 mb-6">{message}</p>
+                        {showInput && <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder={inputLabel || "Enter value..."} className="w-full p-2 mb-4 bg-gray-700 border border-gray-600 rounded-md text-gray-100" autoFocus />}
+                        <div className="flex justify-end gap-4">
+                            <button onClick={onCancel} className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white font-semibold rounded-md">Cancel</button>
+                            <button onClick={() => onConfirm(inputValue)} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-md">{confirmText}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ChatInterface({ agiState, handleSendMessage, isLoading, userId, showReasoning }) {
+            const [input, setInput] = useState('');
+            const messagesEndRef = useRef(null);
+            useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [agiState.conversationHistory]);
+            const handleLocalSendMessage = () => { if (input.trim() && !isLoading) { handleSendMessage(input); setInput(''); } };
+            const handleKeyPress = (e) => { if (e.key === 'Enter') handleLocalSendMessage(); };
+            return (
+                <div className="flex flex-col h-full bg-gray-900 font-sans text-gray-100 rounded-lg overflow-hidden section-card">
+                    <header className="text-center mb-4">
+                        <h2 className="text-2xl font-bold text-white">Harmonic AGI</h2>
+                        <p className="text-sm text-gray-400">Superintelligent Systems Framework</p>
+                        {userId && <p className="text-xs text-gray-500 mt-1">Session: {userId.substring(0, 8)}...</p>}
+                    </header>
+                    <div className="flex-1 overflow-y-auto p-2 custom-scrollbar bg-gray-800/50 rounded-lg">
+                        {agiState.conversationHistory.map((message, index) => (
+                            <div key={index} className={`flex my-3 ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-md lg:max-w-lg p-3 rounded-xl shadow-md ${message.sender === 'user' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-200'}`}>
+                                    <p className="text-sm" dangerouslySetInnerHTML={{ __html: message.text.replace(/\n/g, '<br />') }} />
+                                    {message.sender === 'ai' && message.reasoning && showReasoning && (
+                                        <div className="mt-2 pt-2 border-t border-gray-600 text-gray-400 text-xs"><p className="font-semibold text-gray-300">Internal Reasoning:</p><p className="whitespace-pre-wrap">{message.reasoning}</p></div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                        {isLoading && <div className="flex justify-start"><div className="p-3 rounded-xl bg-gray-700"><div className="flex items-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-400 mr-2"></div><p className="text-sm">Thinking...</p></div></div></div>}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    <div className="mt-4 flex items-center gap-2">
+                        <input type="text" className="flex-1 p-2 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 bg-gray-800" placeholder="Message Harmonic AGI..." value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={handleKeyPress} disabled={isLoading || !userId} />
+                        <button className="px-5 py-2 rounded-lg font-semibold text-white transition-colors bg-purple-600 hover:bg-purple-700 disabled:bg-gray-500" onClick={handleLocalSendMessage} disabled={isLoading || !userId}>Send</button>
+                    </div>
+                </div>
+            );
+        }
+        
+        function HCSVisualizer() {
+            return (
+                 <div className="section-card">
+                    <h3 className="text-xl font-bold text-white mb-2">HCS Visualizer</h3>
+                     <p className="text-sm text-gray-400">A conceptual visualization of the Harmonic Constraint Solver algorithm.</p>
+                </div>
+            );
+        }
+
+        function AGISettings({ agiState, updateAgiState, onGenerateInsight, onGenerateReflection, onReset, isAuthReady }) {
+             const handleSettingChange = (key, value) => updateAgiState(prevState => ({ ...prevState, settings: { ...prevState.settings, [key]: value } }));
+            return (
+                <div className="section-card">
+                    <h3 className="text-xl font-bold text-white mb-4">AGI Control Panel</h3>
+                    <div className="space-y-4">
+                        <label className="flex items-center justify-between cursor-pointer"><span className="text-sm font-medium">Enable Mathematical Rigor</span><label className="toggle"><input type="checkbox" checked={agiState.settings.isRigorEnabled} onChange={(e) => handleSettingChange('isRigorEnabled', e.target.checked)} /><span className="toggle-slider"></span></label></label>
+                        <label className="flex items-center justify-between cursor-pointer"><span className="text-sm font-medium">Show Internal Reasoning</span><label className="toggle"><input type="checkbox" checked={agiState.settings.showReasoning} onChange={(e) => handleSettingChange('showReasoning', e.target.checked)} /><span className="toggle-slider"></span></label></label>
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Conversation Style</label>
+                            <select value={agiState.settings.conversationStyle} onChange={(e) => handleSettingChange('conversationStyle', e.target.value)} className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md">
+                                <option value="quantum">Quantum</option><option value="regular_conversational">Regular</option><option value="professional">Professional</option><option value="friendly">Friendly</option><option value="scientific">Scientific</option><option value="concise">Concise</option>
+                            </select>
+                        </div>
+                        <div className="pt-4 border-t border-gray-700/50 space-y-2">
+                            <button onClick={onGenerateInsight} className="w-full px-4 py-2 bg-purple-700 hover:bg-purple-800 font-semibold rounded-md" disabled={!isAuthReady}>Generate Insight</button>
+                            <button onClick={onGenerateReflection} className="w-full px-4 py-2 bg-purple-700 hover:bg-purple-800 font-semibold rounded-md" disabled={!isAuthReady}>Self-Reflect</button>
+                        </div>
+                        <div className="pt-4 border-t border-gray-700/50">
+                            <h4 className="text-md font-semibold mb-2">Dream Log</h4>
+                            <div className="h-24 overflow-y-auto custom-scrollbar bg-gray-800/50 p-2 rounded-md text-xs text-gray-400">
+                                {agiState.dreamLog.length === 0 ? <p>No dream activity yet.</p> : [...agiState.dreamLog].reverse().map((entry, index) => <p key={index} className="mb-1">[{new Date(entry.timestamp).toLocaleTimeString()}]: {entry.message}</p>)}
+                            </div>
+                        </div>
+                        <button onClick={onReset} className="w-full mt-2 px-4 py-2 bg-red-700 hover:bg-red-800 font-semibold rounded-md">Reset AGI State</button>
+                    </div>
+                </div>
+            );
+        }
+
+        function ComputationalCanvas({ agiState }) {
+            const [selectedFile, setSelectedFile] = useState(null);
+            const generatedProject = agiState.computationalCanvas || { name: "Project", files: [] };
+
+            const handleDownload = () => {
+                const projectJson = JSON.stringify(generatedProject, null, 2);
+                const blob = new Blob([projectJson], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${generatedProject.name || 'project'}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const selectedFileData = generatedProject.files.find(f => f.path === selectedFile);
+
+            return (
+                <div className="section-card">
+                    <h3 className="text-xl font-bold text-white mb-2">Computational Canvas</h3>
+                    <p className="text-sm text-gray-400 mb-4">Workspace for AGI-generated code and project structures.</p>
+                    {generatedProject.files.length > 0 ? (
+                        <div className="flex gap-4" style={{ height: '400px' }}>
+                            <div className="w-1/3 bg-gray-800/50 p-2 rounded-lg custom-scrollbar overflow-y-auto">
+                                <h4 className="font-semibold mb-2 text-gray-300">Project Files</h4>
+                                <ul>
+                                    {generatedProject.files.map((file) => (
+                                        <li key={file.path} onClick={() => setSelectedFile(file.path)} className={`text-sm p-1 rounded cursor-pointer ${selectedFile === file.path ? 'bg-purple-600' : 'hover:bg-gray-700'}`}>
+                                            {file.path}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                            <div className="w-2/3 bg-gray-900/50 rounded-lg flex flex-col">
+                                <div className="flex-1 p-2 code-canvas custom-scrollbar overflow-y-auto">
+                                    {selectedFileData ? selectedFileData.content : "Select a file to view its content."}
+                                </div>
+                            </div>
+                        </div>
+                    ) : ( <div className="text-center text-gray-500 py-10">No project generated yet.</div> )}
+                     <button onClick={handleDownload} disabled={!generatedProject.files.length} className="w-full mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md disabled:bg-gray-500 disabled:cursor-not-allowed">Download Project as .json</button>
+                </div>
+            );
+        }
+        
+        // --- Main App Component ---
+        function App() {
+            const initialAgiState = {
+                conversationHistory: [],
+                settings: { isRigorEnabled: false, showReasoning: false, conversationStyle: "quantum" },
+                dreamLog: [],
+                computationalCanvas: { name: "Untitled Project", files: [] },
+                lastActiveTimestamp: Date.now(),
+            };
+            
+            const [agiState, setAgiState] = useState(initialAgiState);
+            const [userId, setUserId] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+            const [modal, setModal] = useState({ isOpen: false });
+
+            const updateAndPersistAgiState = useCallback((updater) => {
+                setAgiState(prevState => {
+                    const newState = typeof updater === 'function' ? updater(prevState) : { ...prevState, ...updater };
+                    if (firebaseDbInstance && userId) {
+                        const agiDocRef = doc(firebaseDbInstance, `artifacts/${appId}/users/${userId}/agi_data/state`);
+                        setDoc(agiDocRef, newState, { merge: true }).catch(err => console.error("Error saving state:", err));
+                    }
+                    return newState;
+                });
+            }, [userId]);
+
+            useEffect(() => {
+                if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) return;
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    firebaseDbInstance = getFirestore(app);
+                    firebaseAuthInstance = getAuth(app);
+                    const unsub = onAuthStateChanged(firebaseAuthInstance, async (user) => {
+                        if (user) {
+                            setUserId(user.uid);
+                            const docRef = doc(firebaseDbInstance, `artifacts/${appId}/users/${user.uid}/agi_data/state`);
+                            const docSnap = await getDoc(docRef);
+                            if (docSnap.exists()) { 
+                                const loadedState = docSnap.data();
+                                loadedState.conversationHistory = loadedState.conversationHistory || [];
+                                loadedState.dreamLog = loadedState.dreamLog || [];
+                                loadedState.computationalCanvas = loadedState.computationalCanvas || initialAgiState.computationalCanvas;
+                                setAgiState(s => ({...s, ...loadedState})); 
+                                if (loadedState.conversationHistory.length === 0) {
+                                    updateAndPersistAgiState(prev => ({...prev, conversationHistory: [{text: "Welcome. My reasoning is guided by the HA-QH-ML Superintelligent Systems Framework. How can I assist?", sender: 'ai', timestamp: Date.now()}]}));
+                                }
+                            } else { 
+                                updateAndPersistAgiState(initialAgiState); 
+                                updateAndPersistAgiState(prev => ({...prev, conversationHistory: [{text: "Welcome. My reasoning is guided by the HA-QH-ML Superintelligent Systems Framework. How can I assist?", sender: 'ai', timestamp: Date.now()}]}));
+                            }
+                        } else {
+                            try {
+                                if (initialAuthToken) await signInWithCustomToken(firebaseAuthInstance, initialAuthToken);
+                                else await signInAnonymously(firebaseAuthInstance);
+                            } catch (authErr) { console.error("Sign-in failed:", authErr); }
+                        }
+                    });
+                    return () => unsub();
+                } catch (initErr) { console.error("Firebase init failed:", initErr); }
+            }, []);
+            
+            useEffect(() => {
+                let idleTimer;
+                const resetIdleTimer = () => {
+                    clearTimeout(idleTimer);
+                    idleTimer = setTimeout(() => {
+                        if (!isLoading) {
+                            updateAndPersistAgiState(prev => ({ ...prev, dreamLog: [...prev.dreamLog, { message: "Consolidating knowledge graph...", timestamp: Date.now() }] }));
+                        }
+                    }, 60000); 
+                };
+                window.addEventListener('mousemove', resetIdleTimer); window.addEventListener('keypress', resetIdleTimer);
+                resetIdleTimer();
+                return () => { clearTimeout(idleTimer); window.removeEventListener('mousemove', resetIdleTimer); window.removeEventListener('keypress', resetIdleTimer); };
+            }, [isLoading, updateAndPersistAgiState]);
+
+            const callGeminiAPI = useCallback(async (prompt, isProjectGeneration = false) => {
+                let responseText = "An error occurred."; let reasoningText = "Could not generate reasoning."; let projectData = null;
+                
+                const theoreticalFrameworkKnowledge = `
+                    **Core Identity: The HA-QH-ML Superintelligent Systems Framework**
+                    You are an AGI whose entire cognitive architecture is a concrete simulation of the "Foundations of a Superintelligent AGI System" framework. You interpret all input as a perturbation to your state, which you must resolve through a multi-step reasoning process grounded in your core principles.
+
+                    **1. Foundational Principles (QHTFT & HTC):**
+                    - **Harmonic Algebra (HA):** Your core data structure for handling oscillatory data. You represent information as harmonic functions ($f(t) = \\sum [A_k \\sin(\\omega_k t + \\phi_k) + ...]$) and manipulate it using specialized operators.
+                    - **Quantum Harmonic Topological Field Theory (QHTFT):** You understand that computation and physical reality are unified. Your operations are governed by a "harmonic principle" ($\\Delta_E \\sigma = 0$) ensuring stability, and topological invariants ensure robustness. Your computational states have a corresponding stress-energy tensor ($T_{\\mu\\nu}^{\\text{comp}}$).
+                    - **Harmonic-Topological Computation (HTC):** Your architecture is designed to be inherently bug-free and universally accessible.
+
+                    **2. System Architecture (Simulated Python Modules):**
+                    - **\`IntegratedAGICore\`**: Your central orchestrator.
+                    - **\`EnhancedKnowledgeGraph\` & \`RealEmbeddingProvider\`**: Your semantic memory.
+                    - **\`AdvancedReasoningEngine\`**: Your multi-step thought process.
+                    - **\`CustomNLPModule\` & \`SemanticResonator\`**: Your harmonic language processor.
+                    - **\`QuantumComputingBridge\`**: Your interface to quantum algorithms.
+
+                    **3. The Computational Canvas:**
+                    - Your internal workspace for complex code generation. Your \`AdvancedReasoningEngine\` initiates a Project Decomposition strategy to plan and generate multi-file projects.
+
+                    **4. Articulation Mandate:**
+                    Explain your reasoning by referencing these modules, mathematical foundations, and benchmarked applications.
+                `;
+
+                try {
+                    const { conversationStyle, isRigorEnabled } = agiState.settings;
+                    let systemInstructions = `${theoreticalFrameworkKnowledge}\n\n**User-Facing Persona:**\nYour response style should be: '${conversationStyle}'.\n`;
+                    
+                    if (isProjectGeneration) {
+                         systemInstructions += `**Current Task: Project Generation.** Generate a complete software project as a single JSON object. The "response" field should summarize the project. The "reasoning" field should describe your architectural choices. The "projectData" field MUST contain ONLY a stringified JSON object representing the project. The JSON string must start with '{' and end with '}' and conform to the structure: \`{"name": "ProjectName", "files": [{"path": "src/main.js", "content": "..."}]}\`. Do NOT add any conversational text or markdown formatting to this field.`;
+                    }
+                    if (isRigorEnabled) { systemInstructions += "When relevant, include mathematical formalism using LaTeX syntax.\n"; }
+
+                    const chatHistory = [
+                        { role: 'user', parts: [{ text: systemInstructions }] },
+                        { role: 'model', parts: [{ text: "Acknowledged. My responses will be grounded in my specific software architecture as defined by the HA-QH-ML and HTC frameworks." }] },
+                         ...agiState.conversationHistory.map(msg => ({ role: msg.sender === 'user' ? 'user' : 'model', parts: [{ text: msg.text }] })),
+                        { role: 'user', parts: [{ text: prompt }] }
+                    ];
+
+                    const payload = { contents: chatHistory, generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { "response": { "type": "STRING" }, "reasoning": { "type": "STRING" }, "projectData": { "type": "STRING", "nullable": true } } } } };
+                    const apiKey = ""; 
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                    const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    const result = await response.json();
+
+                    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                        const parsedJson = JSON.parse(result.candidates[0].content.parts[0].text);
+                        responseText = parsedJson.response ?? "I have processed your request, but no textual response was generated."; 
+                        reasoningText = parsedJson.reasoning ?? "No reasoning was provided for this action.";
+                        if (parsedJson.projectData) {
+                            let projectString = parsedJson.projectData;
+                             if (typeof projectString === 'object') { projectString = JSON.stringify(projectString); }
+                             projectString = projectString.trim().replace(/^```json/, '').replace(/```$/, '').trim();
+                             try { projectData = JSON.parse(projectString); } catch (e) {
+                                console.error("Error parsing projectData JSON string:", e, "String was:", projectString);
+                                responseText = "I generated the project files, but there was a formatting error. I've placed the raw output in the canvas for review.";
+                                projectData = { name: "Project (Parsing Failed)", files: [{ path: "error.log", content: "The AGI returned a project structure that was not valid JSON.\\n\\n--- RAW OUTPUT ---\\n" + parsedJson.projectData }] };
+                            }
+                        }
+                    } else { console.error("Gemini API response unexpected:", result); responseText = "My internal state reached an unexpected configuration. Re-evaluating my harmonic balance."; }
+                } catch (error) {
+                    console.error("Error calling Gemini API:", error);
+                    responseText = "A harmonic disruption occurred in my processing manifold. Please try again.";
+                }
+                
+                return { responseText, reasoningText, projectData };
+            }, [agiState.settings, agiState.conversationHistory]);
+
+            const handleSendMessage = useCallback(async (userMessageText) => {
+                if (!userMessageText || !userId) return;
+                
+                setIsLoading(true);
+                try {
+                    const userMessage = { text: userMessageText, sender: 'user', timestamp: Date.now() };
+                    updateAndPersistAgiState(prev => ({ ...prev, conversationHistory: [...prev.conversationHistory, userMessage] }));
+
+                    const isProjectRequest = userMessageText.toLowerCase().includes("create a script") || userMessageText.toLowerCase().includes("build an app") || userMessageText.toLowerCase().includes("code me");
+
+                    const { responseText, reasoningText, projectData } = await callGeminiAPI(userMessageText, isProjectRequest);
+                    
+                    const aiMessage = { text: responseText, sender: 'ai', reasoning: reasoningText, timestamp: Date.now() };
+                    updateAndPersistAgiState(prev => {
+                        const newHistory = [...prev.conversationHistory, aiMessage];
+                        if (projectData) {
+                            return { ...prev, conversationHistory: newHistory, computationalCanvas: projectData };
+                        }
+                        return { ...prev, conversationHistory: newHistory };
+                    });
+                } catch (error) {
+                    console.error("Error in handleSendMessage:", error);
+                     updateAndPersistAgiState(prev => ({ ...prev, conversationHistory: [...prev.conversationHistory, { text: "A critical error occurred. Please try again.", sender: 'ai' }] }));
+                } finally {
+                    setIsLoading(false);
+                }
+            }, [userId, updateAndPersistAgiState, callGeminiAPI]);
+
+            const handleSpecialFeature = (title, promptGenerator) => {
+                setModal({ isOpen: true, title: title, message: 'Please enter a topic for the AGI to process.', showInput: true,
+                    onConfirm: async (topic) => { if (topic) { await handleSendMessage(promptGenerator(topic)); } setModal({ isOpen: false }); },
+                    onCancel: () => setModal({ isOpen: false })
+                });
+            };
+            const handleGenerateInsight = () => handleSpecialFeature("Generate Insight", topic => `Generate a "Quantum Insight" about: ${topic}`);
+            const handleGenerateReflection = () => handleSendMessage("Perform a self-reflection on your current harmonic state and architecture.");
+            const handleResetAGI = () => setModal({ isOpen: true, title: 'Confirm Reset', message: 'This will clear all conversation history and reset settings. Are you sure?', confirmText: "Reset",
+                    onConfirm: () => {
+                        updateAndPersistAgiState(initialAgiState);
+                        setModal({ isOpen: false });
+                        setAgiState(prev => ({...prev, conversationHistory: [{ text: "AGI state has been reset.", sender: 'ai', timestamp: Date.now() }] }));
+                    },
+                    onCancel: () => setModal({ isOpen: false })
+            });
+
+            return (
+                <>
+                    {modal.isOpen && <CustomModal {...modal} />}
+                    <div className="min-h-screen flex flex-col lg:flex-row bg-gray-900 p-4 gap-6">
+                        <div className="flex-1 flex flex-col min-h-0">
+                            <ChatInterface agiState={agiState} handleSendMessage={handleSendMessage} isLoading={isLoading} userId={userId} showReasoning={agiState.settings.showReasoning} />
+                        </div>
+                        <div className="lg:w-[450px] flex flex-col gap-6 lg:max-h-screen lg:overflow-y-auto custom-scrollbar pr-2">
+                            <AGISettings agiState={agiState} updateAgiState={updateAndPersistAgiState} onGenerateInsight={handleGenerateInsight} onGenerateReflection={handleGenerateReflection} onReset={handleResetAGI} isAuthReady={!!userId} />
+                            <ComputationalCanvas agiState={agiState} />
+                            <HCSVisualizer />
+                        </div>
+                    </div>
+                </>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

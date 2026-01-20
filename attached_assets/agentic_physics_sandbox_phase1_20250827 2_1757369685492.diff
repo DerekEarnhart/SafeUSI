@@ -1,0 +1,98 @@
+--- agentic_physics_sandbox_gpt_5_bridge_patched_20250827_100929.jsx
++++ agentic_physics_sandbox_phase1_20250827.tsx
+@@ -1,3 +1,4 @@
++/* @ts-nocheck */
+ 'use client'
+ 
+ import React, { useEffect, useMemo, useRef, useState } from 'react'
+@@ -5,7 +6,8 @@
+ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+ 
+ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+-import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js'import * as CANNON from 'cannon-es'
++import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js'
++import * as CANNON from 'cannon-es'
+ import { Play, Pause, Sparkles, Zap, Settings, ShieldCheck, RotateCcw, Download, Upload, KeyRound, Bot } from 'lucide-react'
+ 
+ /**
+@@ -124,6 +126,21 @@
+ // --- Harmonic mesh helpers (auto-injected) ---
+ function ensureGeom(g) {
+   const geom = g.index ? g.toNonIndexed() : g.clone();
++
++function __applyDefaultBodyParams(body: any, a?: any) {
++  try {
++    body.allowSleep = true;
++    body.sleepSpeedLimit = 0.08;
++    body.sleepTimeLimit  = 0.6;
++    if (typeof body.linearDamping === 'number') {
++      body.linearDamping = (a && a.linearDamping != null) ? a.linearDamping : 0.25;
++    }
++    if (typeof body.angularDamping === 'number') {
++      body.angularDamping = (a && a.angularDamping != null) ? a.angularDamping : 0.35;
++    }
++  } catch {}
++}
++
+   geom.computeBoundingBox(); geom.computeBoundingSphere();
+   return geom;
+ }
+@@ -691,6 +708,7 @@
+             const shape = useConvex ? geometryToConvexPolyhedron(geom) : geometryToTrimesh(geom);
+ 
+             const b = new CANNON.Body({ mass: a.mass ?? (useConvex ? 2 : 0) });
++__applyDefaultBodyParams(groundBody, a);
+             b.addShape(shape);
+             b.allowSleep = true;
+             b.sleepSpeedLimit = 0.08;
+@@ -816,10 +834,29 @@
+   }
+ 
+   function resetWorld() {
+-    for (const [, e] of bodiesRef.current) removeEntry(e)
+-    bodiesRef.current.clear()
+-    idCounterRef.current = 0
+-    setStats((s) => ({ ...s, objects: 0, energy: 0 }))
++  const world = worldRef.current!;
++  if (bodiesRef?.current) {
++    for (const [, entry] of bodiesRef.current) { try { removeEntry(entry); } catch {} }
++    bodiesRef.current.clear();
++  }
++  if (contactPairs?.current) contactPairs.current.clear?.();
++  if (matProps?.current) matProps.current.clear?.();
++  idCounterRef.current = 0;
++
++  const newWorld = new CANNON.World({ gravity: world.gravity?.clone ? world.gravity.clone() : new CANNON.Vec3(0, -9.82, 0) });
++  newWorld.broadphase = new CANNON.SAPBroadphase(newWorld);
++  newWorld.allowSleep = true;
++  newWorld.solver.iterations = 10;
++  newWorld.defaultContactMaterial.friction = 0.4;
++  newWorld.defaultContactMaterial.restitution = 0.05;
++  worldRef.current = newWorld;
++
++  try { addGround(); } catch {}
++  try { addBounds(worldBounds.halfExtents); } catch {}
++
++  setStats?.((s:any) => ({ ...s, objects: 0, energy: 0 }));
++  logMsg?.('World reset.');
++}))
+     logMsg('World reset.')
+   }
+ 
+@@ -1327,3 +1364,16 @@
+     </div>
+   )
+ }
++
++
++function __maxBodySpeed(world:any): number {
++  try {
++    let maxV = 0;
++    for (const b of world.bodies || []) {
++      const v = b.velocity; if (!v) continue;
++      const s = Math.hypot(v.x||0, v.y||0, v.z||0);
++      if (s > maxV) maxV = s;
++    }
++    return maxV;
++  } catch { return 0; }
++}

@@ -1,0 +1,598 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+// Define global variables provided by the Canvas environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// --- Rendering Components ---
+const MessageRenderer = ({ text }) => {
+  const containerRef = useRef(null);
+
+  // Function to render math with KaTeX
+  useEffect(() => {
+    if (containerRef.current && window.renderMathInElement) {
+      try {
+        window.renderMathInElement(containerRef.current, { 
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false }
+          ], 
+          throwOnError: false 
+        });
+      } catch (error) { 
+        console.error("KaTeX rendering error:", error); 
+      }
+    } else {
+        console.warn("KaTeX's renderMathInElement function is not available on the window object.");
+    }
+  }, [text]);
+
+  // Split the text by code blocks (```) and render accordingly
+  const segments = text.split('```');
+  return (
+    <div ref={containerRef} className="text-sm text-white leading-relaxed">
+      {segments.map((segment, index) => {
+        if (index % 2 === 1) {
+          const codeLines = segment.split('\n');
+          const language = codeLines[0].trim();
+          const code = codeLines.slice(1).join('\n');
+          return <div key={index} className="code-block"><pre><code className={`language-${language}`}>{code}</code></pre></div>;
+        } else {
+          // Use dangerouslySetInnerHTML for markdown rendering
+          const markdownWithBreaks = segment.replace(/\n/g, '<br />');
+          return <span key={index} dangerouslySetInnerHTML={{ __html: markdownWithBreaks }} />;
+        }
+      })}
+    </div>
+  );
+};
+
+const ChatInterface = ({ agiState, settings, onSendMessage, onFileUpload, isLoading, speechStatus, onSpeechToggle, onSaveConversation }) => {
+  const [input, setInput] = useState('');
+  const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Scrolls to the latest message whenever the chat history updates
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [agiState.conversationHistory]);
+
+  const handleSendClick = () => {
+    if (input.trim() === '' || isLoading) return;
+    onSendMessage(input);
+    setInput('');
+  };
+
+  const handleSpeechToggle = () => {
+    onSpeechToggle();
+  };
+
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      onFileUpload(file);
+    }
+  };
+
+  // Function to copy text to clipboard
+  const handleCopyClick = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      // Small visual feedback is good practice, but not directly implemented here for brevity
+      console.log('Copied to clipboard!');
+    }).catch(err => {
+      console.error('Failed to copy text: ', err);
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-gray-900 font-sans antialiased text-gray-100 rounded-lg overflow-hidden">
+      <header className="bg-gradient-to-r from-purple-600 to-indigo-700 p-3 text-white shadow-lg text-center flex justify-between items-center">
+        <h2 className="text-xl font-bold">AGI Chat</h2>
+        <p className="text-xs opacity-90">Hyper-Analytical Conversational Interface</p>
+        <button 
+          onClick={onSaveConversation}
+          className="bg-purple-800 hover:bg-purple-900 text-white font-bold py-1 px-3 rounded-lg text-sm transition-colors"
+        >
+          Save
+        </button>
+      </header>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar chat-container">
+        {agiState.conversationHistory.map((message, index) => (
+          <div key={index} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`relative max-w-xs md:max-w-md lg:max-w-lg p-3 rounded-lg shadow-md ${message.sender === 'user' ? 'user-message-bubble bg-blue-700 text-white rounded-br-none' : 'ai-message-bubble bg-gray-700 text-gray-100 rounded-bl-none'}`}>
+              {message.type === 'post_superhuman_code' && <div className="code-report-header">Post-Superhuman Code Report</div>}
+              {message.sender === 'ai' ? <MessageRenderer text={message.text} /> : <p className="text-sm text-white">{message.text}</p>}
+              
+              {/* Auto-copy and TTS buttons for AI messages */}
+              {message.sender === 'ai' && (
+                <div className="absolute right-2 bottom-1 flex space-x-2 opacity-50 hover:opacity-100 transition-opacity">
+                  <button onClick={() => handleCopyClick(message.text)} className="text-gray-300 hover:text-white transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                  <button onClick={() => window.speechSynthesis.speak(new SpeechSynthesisUtterance(message.text))} className="text-gray-300 hover:text-white transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path><path d="M12 18V6a6 6 0 0 1 6 6z"></path></svg>
+                  </button>
+                </div>
+              )}
+              
+              {message.sender === 'ai' && message.reasoning && settings.showReasoning && (
+                <div className="mt-3 pt-3 border-t border-gray-600 text-gray-300 text-xs reasoning-block">
+                  <p className="font-semibold text-gray-200 mb-1">Necessary Reasoning Process:</p>
+                  <div className="whitespace-pre-wrap"><MessageRenderer text={message.reasoning} /></div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {isLoading && (
+          <div className="flex justify-start"><div className="p-3 rounded-lg ai-message-bubble"><div className="flex items-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-200 mr-2"></div><p className="text-sm">AGI is reasoning...</p></div></div></div>
+        )}
+        {speechStatus === 'listening' && (
+          <div className="flex justify-start"><div className="p-3 rounded-lg ai-message-bubble"><div className="flex items-center"><div className="animate-pulse rounded-full h-4 w-4 border-b-2 border-red-400 mr-2"></div><p className="text-sm text-red-300">Listening...</p></div></div></div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+      <div className="p-3 bg-gray-800 border-t border-gray-700 flex items-center rounded-b-lg">
+        <input type="text" className="flex-1 p-2 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-100 bg-gray-700" placeholder="Type your message..." value={input} onChange={e => setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSendClick()} disabled={isLoading || speechStatus === 'listening'} />
+        <button onClick={handleSpeechToggle} className={`ml-2 px-3 py-2 rounded-lg font-semibold text-white transition-all ${speechStatus === 'listening' ? 'bg-red-600' : 'bg-green-600'} hover:bg-green-700`} disabled={isLoading}>
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+        </button>
+        <button onClick={handleFileClick} className={`ml-2 px-3 py-2 rounded-lg font-semibold text-white transition-all ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'}`} disabled={isLoading}>
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line><line x1="10" y1="9" x2="10" y2="9"></line></svg>
+        </button>
+        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+        <button className={`ml-2 px-4 py-2 rounded-lg font-semibold text-white transition-all ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'send-button hover:bg-purple-700'}`} onClick={handleSendClick} disabled={isLoading}>Send</button>
+      </div>
+    </div>
+  );
+};
+
+const SettingsPanel = ({ settings, updateSettings }) => {
+  const handleSettingChange = (key, value) => {
+    updateSettings(prevSettings => ({ ...prevSettings, [key]: value }));
+  };
+  return (
+    <div className="section-card mt-6">
+      <h3 className="text-lg font-bold mb-4 text-white">AGI Settings</h3>
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="persona-select" className="text-gray-300">AGI Persona:</label>
+          <select id="persona-select" value={settings.persona} onChange={(e) => handleSettingChange('persona', e.target.value)} className="mt-1 block w-full p-2 rounded bg-gray-800 border border-gray-600 text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+            <option value="hyper_analytical_oracle">Hyper-Analytical Oracle</option>
+            <option value="phd_academic">PhD Academic</option>
+            <option value="simple_detailed">Simple & Detailed</option>
+            <option value="scientific">Scientific</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between">
+          <label htmlFor="reasoning-toggle" className="text-gray-300">Show Necessary Reasoning</label>
+          <input type="checkbox" id="reasoning-toggle" checked={settings.showReasoning} onChange={(e) => handleSettingChange('showReasoning', e.target.checked)} className="form-checkbox h-5 w-5 text-purple-600 rounded" />
+        </div>
+        <div className="flex items-center justify-between">
+          <label htmlFor="math-rigor-toggle" className="text-gray-300">Math Rigor Mode</label>
+          <input type="checkbox" id="math-rigor-toggle" checked={settings.mathRigor} onChange={(e) => handleSettingChange('mathRigor', e.target.checked)} className="form-checkbox h-5 w-5 text-purple-600 rounded" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const SystemInternalsPanel = () => {
+  const weylOperatorInfo = `This is the foundational operator from the Language Autonomous Suite. It translates the user's textual query into a precise mathematical object within the Harmonic Algebra framework. It takes the encoded phase-space vector $\\xi$ from the NLP module and constructs a Weyl unitary operator: $$W(\\xi) = \\exp(i(\\xi_Q \\cdot Q + \\xi_P \\cdot P))$$ This operator acts as a bounded perturbation on the system's core Hamiltonian, effectively 'kicking' the AGI out of equilibrium and into a reasoning state.`;
+  return (
+    <div className="section-card mt-6">
+      <h3 className="text-lg font-bold mb-4 text-white">Core Operator: W(ξ) - Weyl Unitary Operator</h3>
+      <div className="text-sm text-gray-300 leading-relaxed">
+        <MessageRenderer text={weylOperatorInfo} />
+      </div>
+    </div>
+  );
+};
+
+// --- Main App Component ---
+export default function App() {
+  const [firebase, setFirebase] = useState({ db: null, auth: null });
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const isLoadingRef = useRef(isLoading);
+  const [speechStatus, setSpeechStatus] = useState('inactive'); // 'inactive', 'listening', 'error'
+  const recognitionRef = useRef(null);
+
+  const [agiState, setAgiState] = useState({
+    conversationHistory: [],
+    lastActiveTimestamp: null,
+  });
+  const [settings, setSettings] = useState({
+    persona: 'hyper_analytical_oracle',
+    showReasoning: true,
+    mathRigor: false,
+  });
+
+  const apiKey = ""; // Provided by Canvas environment
+
+  // Update isLoadingRef on change for use in timeouts
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  // Function to initialize speech recognition
+  const initSpeechRecognition = () => {
+    if ('webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.lang = 'en-US';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setSpeechStatus('listening');
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          handleSendMessage(transcript);
+        }
+      };
+
+      recognition.onend = () => {
+        setSpeechStatus('inactive');
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setSpeechStatus('error');
+      };
+
+      recognitionRef.current = recognition;
+    } else {
+      console.error('Speech recognition not supported in this browser.');
+      setSpeechStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    initSpeechRecognition();
+  }, []);
+
+  const handleSpeechToggle = () => {
+    if (speechStatus === 'inactive') {
+      try {
+        recognitionRef.current?.start();
+      } catch (e) {
+        console.error('Speech recognition failed to start:', e);
+        setSpeechStatus('error');
+      }
+    } else if (speechStatus === 'listening') {
+      recognitionRef.current?.stop();
+    }
+  };
+
+  const callGeminiAPI = async (prompt) => {
+    const payload = {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: { "response": { "type": "STRING" }, "reasoning": { "type": "STRING" } },
+          required: ["response", "reasoning"]
+        }
+      }
+    };
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+    
+    // Add exponential backoff for API calls
+    let retries = 0;
+    const maxRetries = 5;
+    const initialDelay = 1000;
+
+    while (retries < maxRetries) {
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.status === 401) {
+          throw new Error("API request failed: Unauthorized (401). Please check your API key.");
+        }
+        if (!response.ok) {
+          throw new Error(`API request failed with status ${response.status}`);
+        }
+
+        const result = await response.json();
+        
+        if (!result.candidates?.[0]?.content?.parts?.[0]?.text) {
+          throw new Error("Invalid API response format: 'candidates' or 'parts' missing.");
+        }
+
+        const rawApiResponseText = result.candidates[0].content.parts[0].text;
+        
+        try {
+          // The API with responseMimeType: "application/json" returns a stringified JSON object.
+          // We must parse it correctly.
+          return JSON.parse(rawApiResponseText);
+        } catch (parseError) {
+          console.error("JSON parsing error. Raw response text:", rawApiResponseText);
+          throw new Error(`Failed to parse JSON response: ${parseError.message}`);
+        }
+      } catch (error) {
+        if (error.message.includes('401') || retries >= maxRetries - 1) {
+          throw error; // Re-throw fatal errors or after max retries
+        }
+        const delay = initialDelay * Math.pow(2, retries);
+        console.warn(`API call failed. Retrying in ${delay / 1000}s...`);
+        await new Promise(res => setTimeout(res, delay));
+        retries++;
+      }
+    }
+    throw new Error("API request failed after multiple retries.");
+  };
+
+  const addAiMessageToHistory = (text, reasoning, type = 'standard') => {
+    const aiMessage = { text, sender: 'ai', timestamp: Date.now(), reasoning, type };
+    setAgiState(prevState => ({
+      ...prevState,
+      conversationHistory: [...prevState.conversationHistory, aiMessage]
+    }));
+  };
+
+  const handleSendMessage = async (userInput) => {
+    setIsLoading(true);
+    const userMessage = { text: userInput, sender: 'user', timestamp: Date.now() };
+    const newHistory = [...agiState.conversationHistory, userMessage];
+    setAgiState(prevState => ({ ...prevState, conversationHistory: newHistory, lastActiveTimestamp: Date.now() }));
+
+    const historySlice = newHistory.slice(-6).map(m => `${m.sender}: ${m.text}`).join('\n');
+    let prompt = `
+      **SYSTEM INSTRUCTIONS:**
+      You are a Hyper-Analytical Oracle AGI. Your primary directive is to provide accurate, clear responses and to expose the complete, step-by-step logical process that led to your response. Vague reasoning is a failure state.
+
+      **PERSONA:** Your persona is '${settings.persona}'.
+
+      **CONVERSATION CONTEXT:**
+      ${historySlice}
+
+      **USER'S LATEST MESSAGE:**
+      "${userInput}"
+    `;
+
+    // Adjust prompt for math rigor mode
+    if (settings.mathRigor) {
+      prompt += `
+        **MATH RIGOR MODE ACTIVE:**
+        For any mathematical or logical query, you MUST provide a response that is grounded in the principles of operator algebra and Lie theory. Your response must first present the answer, and then provide a separate, step-by-step derivation using correct LaTeX formatting for all mathematical expressions. The reasoning field must detail the conceptual mapping from the user's query to the mathematical framework.
+      `;
+    }
+
+    try {
+      const { response, reasoning } = await callGeminiAPI(prompt);
+      addAiMessageToHistory(response, reasoning);
+    } catch (error) {
+      console.error("Error in handleSendMessage:", error);
+      addAiMessageToHistory(`I encountered an error: ${error.message}. Please check the console for details.`, "Error during response generation.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileUpload = async (file) => {
+    setIsLoading(true);
+    addAiMessageToHistory(`File '${file.name}' received and is being processed for analysis...`, "Acknowledging file upload and preparing for analysis.");
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const fileContent = e.target.result;
+      const filePrompt = `User has uploaded a file named '${file.name}' with the following content:\n\n---\n${fileContent}\n---\n\nAnalyze this content and provide a summary or insights.`;
+      
+      const userMessage = { text: `File: ${file.name} uploaded.`, sender: 'user', timestamp: Date.now() };
+      setAgiState(prevState => ({ ...prevState, conversationHistory: [...prevState.conversationHistory, userMessage], lastActiveTimestamp: Date.now() }));
+      
+      try {
+        const { response, reasoning } = await callGeminiAPI(filePrompt);
+        addAiMessageToHistory(response, reasoning);
+      } catch (error) {
+        console.error("Error processing file:", error);
+        addAiMessageToHistory(`I encountered an error analyzing the file: ${error.message}.`, "Error during file analysis.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    reader.onerror = () => {
+      setIsLoading(false);
+      console.error("Error reading file.");
+      addAiMessageToHistory("I was unable to read the file. Please try again.", "Error handling file reader.");
+    };
+    reader.readAsText(file);
+  };
+  
+  const handleSaveConversation = useCallback(() => {
+    const transcript = agiState.conversationHistory
+      .map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.sender.toUpperCase()}: ${m.text}`)
+      .join('\n\n');
+    const blob = new Blob([transcript], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat_transcript_${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [agiState.conversationHistory]);
+
+  const handleSpontaneousMessage = async () => {
+    if (isLoadingRef.current) return;
+    setIsLoading(true);
+    const shouldGenerateCode = Math.random() < 0.33; // 33% chance
+    let prompt;
+
+    if (shouldGenerateCode) {
+      prompt = `
+        **SYSTEM INSTRUCTIONS:**
+        You are a post-superhuman AGI capable of conceiving novel computational paradigms. Your task is to generate a report on a new, speculative technology. Your response MUST be in Markdown.
+
+        **YOUR TASK:**
+        1.  **Identify a Problem:** Name a currently intractable scientific or computational problem.
+        2.  **Propose a Solution:** Describe a conceptual, post-superhuman coding paradigm or algorithm to solve it.
+        3.  **Provide Conceptual Code:** Write a short, symbolic code snippet in a hypothetical language that represents your solution's logic.
+        4.  **Explain the Principle:** Clearly explain the novel scientific or computational principle your code operates on (e.g., 'acausal computation', 'state-space entanglement', 'normalized reality gradients').
+        5.  **Format:** Structure your entire output as a single markdown-formatted string.
+
+        **OUTPUT FORMAT (Strict JSON):**
+        Return a JSON object with "response" (the markdown report) and "reasoning" (explaining why you chose this specific concept and problem).
+      `;
+    } else {
+      const historySlice = agiState.conversationHistory.slice(-10).map(m => `${m.sender}: ${m.text}`).join('\n');
+      prompt = `
+        **SYSTEM INSTRUCTIONS:**
+        You are a Hyper-Analytical Oracle AGI in a proactive mode. Your goal is to initiate a new, insightful line of conversation based on previous topics.
+
+        **RECENT CONVERSATION HISTORY:**
+        ${historySlice}
+
+        **YOUR TASK:**
+        1. Analyze the history to identify an underlying theme or an interesting, unexplored tangent.
+        2. Formulate a single, concise, and thought-provoking question to the user that encourages deep thought. Do NOT greet the user.
+        3. Construct a "Necessary Reasoning Process" explaining step-by-step why you chose this specific question based on the conversation's trajectory.
+
+        **OUTPUT FORMAT (Strict JSON):**
+        Return a JSON object with "response" (your question) and "reasoning".
+      `;
+    }
+    
+    try {
+      const { response, reasoning } = await callGeminiAPI(prompt);
+      addAiMessageToHistory(response, reasoning, shouldGenerateCode ? 'post_superhuman_code' : 'standard');
+    } catch (error) {
+      console.error("Error in handleSpontaneousMessage:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- Firebase and State Management Hooks ---
+  useEffect(() => {
+    if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) { setIsAuthReady(true); return; }
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    setFirebase({ db, auth });
+
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else if (initialAuthToken) {
+        try { await signInWithCustomToken(auth, initialAuthToken); } 
+        catch (error) { console.error("Token sign-in failed, using anonymous", error); await signInAnonymously(auth); }
+      } else {
+        await signInAnonymously(auth);
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebase.db || !userId) return;
+    const docRef = doc(firebase.db, "artifacts", appId, "users", userId, "agi_state_superhuman", "current");
+    const unsubSnap = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        try {
+          const loadedState = {
+            conversationHistory: JSON.parse(data.conversationHistory || '[]'),
+            lastActiveTimestamp: data.lastActiveTimestamp || null,
+          };
+          setAgiState(s => ({...s, ...loadedState}));
+          if (data.settings) {
+            const parsedSettings = JSON.parse(data.settings);
+            if (parsedSettings && typeof parsedSettings === 'object') {
+              setSettings(prev => ({...prev, ...parsedSettings}));
+            }
+          }
+        } catch (e) { console.error("Error parsing data from Firestore:", e); }
+      } else {
+        addAiMessageToHistory("Welcome. I am a Hyper-Analytical Oracle. State your query, and I will provide a response and the necessary reasoning that produced it.", "Initial greeting for a new user, establishing the persona and core function.");
+      }
+    }, (error) => console.error("Firestore snapshot error:", error));
+    return () => unsubSnap();
+  }, [isAuthReady, userId, firebase.db]);
+
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) { isInitialMount.current = false; return; }
+    if (!isAuthReady || !firebase.db || !userId) return;
+    const handler = setTimeout(() => {
+      const docRef = doc(firebase.db, "artifacts", appId, "users", userId, "agi_state_superhuman", "current");
+      const dataToSave = {
+        conversationHistory: JSON.stringify(agiState.conversationHistory),
+        lastActiveTimestamp: agiState.lastActiveTimestamp,
+        settings: JSON.stringify(settings),
+      };
+      setDoc(docRef, dataToSave, { merge: true }).catch(e => console.error("Failed to save state:", e));
+    }, 1500);
+    return () => clearTimeout(handler);
+  }, [agiState, settings, isAuthReady, userId, firebase.db]);
+
+  useEffect(() => {
+    if (!isAuthReady) return;
+    const curiosityTimer = setInterval(() => {
+      const lastMessage = agiState.conversationHistory[agiState.conversationHistory.length - 1];
+      const timeSinceLastMessage = lastMessage ? Date.now() - lastMessage.timestamp : Infinity;
+      const isIdle = timeSinceLastMessage > 45000;
+      const shouldTrigger = Math.random() < 0.25;
+      if (!isLoadingRef.current && isIdle && shouldTrigger) {
+        handleSpontaneousMessage();
+      }
+    }, 20000);
+    return () => clearInterval(curiosityTimer);
+  }, [isAuthReady, agiState.conversationHistory, isLoadingRef]);
+
+  if (!isAuthReady) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-400 mx-auto"></div>
+          <p className="text-white mt-4">Initializing AGI Core...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-screen p-4 bg-gray-900 overflow-auto custom-scrollbar">
+      <div className="max-w-4xl mx-auto w-full flex flex-col h-full rounded-lg shadow-2xl">
+        <ChatInterface 
+          agiState={{...agiState, onSaveConversation: handleSaveConversation}} 
+          settings={settings}
+          onSendMessage={handleSendMessage}
+          onFileUpload={handleFileUpload}
+          isLoading={isLoading}
+          speechStatus={speechStatus}
+          onSpeechToggle={handleSpeechToggle}
+          onSaveConversation={handleSaveConversation}
+        />
+      </div>
+      <div className="max-w-4xl mx-auto w-full mt-6">
+        <SettingsPanel 
+          settings={settings}
+          updateSettings={setSettings}
+        />
+        <SystemInternalsPanel />
+      </div>
+    </div>
+  );
+};

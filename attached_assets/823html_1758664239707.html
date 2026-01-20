@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resonant Unified Intelligence System (RUIS)</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React and Babel for running JSX in the browser -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Three.js for 3D visualization -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- D3.js for data visualization -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Recharts for charts -->
+    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+    <!-- JSZip and FileSaver for project download functionality -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        /* Custom scrollbar for a better look */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        body { font-family: 'Inter', sans-serif; background-color: #111827; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        .recharts-tooltip-wrapper { outline: none !important; }
+        .recharts-surface { overflow: visible; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+ // --- EXISTING COMPONENTS (Harmonizer, Chat, etc.) ARE MODIFIED OR REPLACED BELOW ---
+
+ const { createContext, useContext, useState, useEffect, useRef, PureComponent } = React;
+ const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+
+ // --- UTILITY FUNCTIONS (speak, listen, generateId, callGenerativeAPI) remain the same ---
+ const speak = txt => {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(txt);
+  speechSynthesis.speak(u);
+ };
+
+ const listen = onResult => {
+  if (!window.webkitSpeechRecognition) {
+      const modal = document.createElement('div');
+      modal.innerHTML = `<div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000;">
+        <div style="background: #1f2937; color: white; padding: 2rem; border-radius: 0.5rem; text-align: center;">
+          <p>Speech-to-text is not supported in this browser.</p>
+          <button id="closeModal" style="margin-top: 1rem; padding: 0.5rem 1rem; background: #4f46e5; border: none; border-radius: 0.25rem; cursor: pointer;">OK</button>
+        </div>
+      </div>`;
+      document.body.appendChild(modal);
+      document.getElementById('closeModal').onclick = () => document.body.removeChild(modal);
+      return;
+  }
+  const rec = new webkitSpeechRecognition();
+  rec.continuous = false;
+  rec.lang = "en-US";
+  rec.onresult = e => onResult(e.results[0][0].transcript);
+  rec.start();
+ };
+ 
+ const generateId = () => Math.random().toString(36).substr(2, 9);
+
+ const callGenerativeAPI = async (prompt, history = [], generationConfig = null, settings) => {
+    const { activeModel, geminiProKey } = settings;
+    const apiKey = geminiProKey || "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+    const chatHistory = [...history, { role: "user", parts: [{ text: prompt }] }];
+    const payload = { contents: chatHistory };
+    if (generationConfig) payload.generationConfig = generationConfig;
+
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            const errorBody = await response.json();
+            throw new Error(`API Error: ${response.status} ${response.statusText} - ${errorBody.error.message}`);
+        }
+        const result = await response.json();
+        if (result.candidates?.[0]?.content?.parts?.[0]) {
+            const text = result.candidates[0].content.parts[0].text;
+            if (generationConfig?.responseMimeType === "application/json") {
+                try {
+                    const cleanedText = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+                    return JSON.parse(cleanedText);
+                } catch (e) { throw new Error("Failed to parse JSON response from API."); }
+            }
+            return text;
+        } else { throw new Error("Invalid response structure from API."); }
+    } catch (error) {
+        console.error("Gemini API call failed:", error);
+        throw error;
+    }
+ };
+
+
+ // --- CONTEXTS (Settings, Auth, Conversation) remain the same ---
+ const defaultSettings = {
+  tts: true, stt: true, proactive: true, interval: 30000,
+  activeModel: 'gemini', geminiProKey: '',
+ };
+ const SettingsContext = createContext(defaultSettings);
+ const AuthContext = createContext({ isLoggedIn: false, user: null, login: () => {}, signup: () => {}, logout: () => {} });
+ const ConversationContext = createContext({
+  conversations: [], currentConversationId: null, proactiveThoughts: [],
+  startNewConversation: () => {}, selectConversation: () => {}, addMessage: () => {},
+  updateMessage: () => {}, addProactiveThought: () => {}, getCurrentConversation: () => null,
+ });
+
+
+ // --- NEW & UPGRADED RUIS MODULES ---
+
+ /**
+  * Resonant Cognition Engine (RCE)
+  * Upgraded from Harmonizer. Visualizes the decomposition of inputs into harmonic waveforms.
+  */
+ function ResonantCognitionEngine() {
+    const [concept, setConcept] = useState("Quantum Entanglement");
+    const [result, setResult] = useState(null);
+    const settings = useContext(SettingsContext);
+    const DOMAINS = ["Math", "Physics", "Language", "Creativity", "Ethics", "Metacognition"];
+
+    const harmonize = async () => {
+        if (!concept.trim()) return;
+        setResult({ loading: true });
+        const prompt = `Analyze the concept: "${concept}" and provide resonance scores across the following domains (0-1.0): ${DOMAINS.join(", ")}. Provide a concise interpretation of the harmonization.`;
+        const generationConfig = {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: "OBJECT",
+                properties: { "resonances": { type: "OBJECT" }, "interpretation": { "type": "STRING" } },
+                required: ["resonances", "interpretation"]
+            }
+        };
+        try {
+            const parsedJson = await callGenerativeAPI(prompt, [], generationConfig, settings);
+            setResult({ resonances: parsedJson.resonances, interpretation: parsedJson.interpretation });
+            if (settings.tts) speak(parsedJson.interpretation);
+        } catch (error) {
+            setResult({ error: `An error occurred: ${error.message}` });
+        }
+    };
+    
+    // Initial harmonization on load
+    useEffect(() => { harmonize(); }, []);
+
+    return (
+        <div className="text-white">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-atom mr-3 text-purple-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-purple-400">Resonant Cognition Engine</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Decomposes any input concept into its fundamental harmonic components across multiple domains, forming the primary input for the entire AGI.</p>
+            <div className="space-y-4">
+                <textarea value={concept} onChange={e => setConcept(e.target.value)} className="w-full p-3 bg-gray-800 border border-gray-700 rounded min-h-[80px] text-white focus:ring-2 focus:ring-purple-500" placeholder="Enter a concept to harmonize..." />
+                <button onClick={harmonize} disabled={result?.loading} className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-3 rounded text-white font-medium">
+                    {result?.loading ? 'Harmonizing...' : 'Harmonize'}
+                </button>
+                {result?.loading && <div className="text-center p-4">Loading...</div>}
+                {result?.error && <p className="text-red-400 bg-red-900/20 p-3 rounded">{result.error}</p>}
+                {result?.resonances && (
+                    <div className="space-y-4">
+                        <div className="flex items-end h-24 bg-gray-700 rounded-md overflow-hidden my-4 p-2">
+                            {Object.values(result.resonances).map((v, i) => (
+                                <div key={i} className="flex-1 h-full flex items-end justify-center">
+                                    <div className="w-4/5 bg-purple-500 rounded-t-md transition-all duration-500" style={{ height: `${(v || 0) * 100}%` }}></div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                            {Object.entries(result.resonances).map(([d, v]) => (
+                                <div key={d} className="bg-gray-700 p-2 rounded">
+                                    <span className="text-sm text-gray-300">{d}: </span>
+                                    <span className="font-bold text-white">{(Math.round((v || 0) * 100))}%</span>
+                                </div>
+                            ))}
+                        </div>
+                        <textarea readOnly className="w-full p-3 bg-gray-800 border border-gray-700 rounded text-white" value={result.interpretation} rows={4} />
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+ }
+
+/**
+ * Quantum Resonance Topology Module (QRTM)
+ * Upgraded from ThreeVis. Shows topological links between concepts.
+ */
+function QuantumResonanceTopologyModule() {
+    const mountRef = useRef(null);
+
+    useEffect(() => {
+        if (!mountRef.current) return;
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, mountRef.current.clientWidth / mountRef.current.clientHeight, 0.1, 1000);
+        camera.position.z = 15;
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+        mountRef.current.appendChild(renderer.domElement);
+
+        const nodes = [];
+        const edges = [];
+
+        // Central Node
+        const centralGeo = new THREE.IcosahedronGeometry(2, 1);
+        const centralMat = new THREE.MeshBasicMaterial({ color: 0x8b5cf6, wireframe: true });
+        const centralNode = new THREE.Mesh(centralGeo, centralMat);
+        scene.add(centralNode);
+        nodes.push(centralNode);
+
+        // Satellite Nodes
+        for (let i = 0; i < 6; i++) {
+            const phi = (i / 6) * Math.PI * 2;
+            const radius = 8;
+            const x = Math.cos(phi) * radius;
+            const y = Math.sin(phi) * radius;
+            const z = (Math.random() - 0.5) * 4;
+
+            const satGeo = new THREE.SphereGeometry(0.5, 16, 16);
+            const satMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
+            const satNode = new THREE.Mesh(satGeo, satMat);
+            satNode.position.set(x, y, z);
+            scene.add(satNode);
+            nodes.push(satNode);
+
+            // Edge
+            const lineMat = new THREE.LineBasicMaterial({ color: 0x6b7280, transparent: true, opacity: 0.5 });
+            const points = [centralNode.position, satNode.position];
+            const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(lineGeo, lineMat);
+            scene.add(line);
+            edges.push(line);
+        }
+        
+        const animate = () => {
+            requestAnimationFrame(animate);
+            const time = Date.now() * 0.0005;
+            centralNode.rotation.x += 0.005;
+            centralNode.rotation.y += 0.003;
+
+            edges.forEach(edge => {
+                edge.material.opacity = 0.3 + 0.3 * Math.sin(time * 5 + edge.id);
+            });
+
+            renderer.render(scene, camera);
+        };
+        animate();
+
+        const handleResize = () => {
+            camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+        };
+        window.addEventListener('resize', handleResize);
+
+        return () => {
+            window.removeEventListener('resize', handleResize);
+            if(mountRef.current) mountRef.current.removeChild(renderer.domElement);
+            renderer.dispose();
+        };
+    }, []);
+
+    return (
+        <div className="text-white h-full flex flex-col">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-project-diagram mr-3 text-green-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-green-400">Quantum Resonance Topology</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Visualizes the topological relationships and resonance patterns between conceptual nodes in the AGI's knowledge space.</p>
+            <div ref={mountRef} className="flex-1 bg-gray-900/50 rounded-lg border border-gray-700"></div>
+        </div>
+    );
+}
+
+
+/**
+ * Adaptive Harmonic Decision Engine (AHDE)
+ * Upgraded from ThoughtsPanel. Shows decision-making process.
+ */
+function AdaptiveHarmonicDecisionEngine() {
+    const { proactiveThoughts } = useContext(ConversationContext);
+    const [decision, setDecision] = useState(null);
+
+    const makeDecision = () => {
+        const options = [
+            { name: "Hypothesis", resonance: Math.random() * 0.5 + 0.5 },
+            { name: "Experiment", resonance: Math.random() * 0.7 },
+            { name: "Connection", resonance: Math.random() * 0.9 },
+            { name: "Self-Reflection", resonance: Math.random() * 0.4 },
+        ];
+        const bestOption = options.reduce((max, op) => op.resonance > max.resonance ? op : max, options[0]);
+        setDecision({ options, best: bestOption });
+    };
+    
+    useEffect(() => { makeDecision(); }, [proactiveThoughts]);
+
+    return (
+        <div className="text-white h-full flex flex-col">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-brain mr-3 text-blue-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-blue-400">Adaptive Harmonic Decision Engine</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Displays proactive thoughts and visualizes the decision-making process based on resonance with internal states and ethical guidelines.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1">
+                <div className="bg-gray-800 p-4 rounded-lg flex flex-col">
+                    <h3 className="text-lg font-semibold mb-2">Proactive Thought Stream</h3>
+                    <div className="flex-1 overflow-y-auto space-y-2">
+                        {proactiveThoughts.length === 0 ? (
+                            <p className="text-gray-400">No thoughts yet.</p>
+                        ) : (
+                            proactiveThoughts.map((thought, i) => (
+                                <div key={i} className="bg-blue-900/50 border border-blue-700 text-blue-200 p-3 rounded-lg text-sm">{thought.text}</div>
+                            ))
+                        )}
+                    </div>
+                </div>
+                <div className="bg-gray-800 p-4 rounded-lg">
+                    <h3 className="text-lg font-semibold mb-2">Decision Simulation</h3>
+                    <button onClick={makeDecision} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded mb-4">Simulate New Decision</button>
+                    {decision && (
+                        <div className="space-y-3">
+                            {decision.options.map(opt => (
+                                <div key={opt.name}>
+                                    <div className="flex justify-between items-center text-sm mb-1">
+                                        <span>{opt.name}</span>
+                                        <span className="font-mono text-blue-300">{(opt.resonance * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-700 rounded-full h-2.5">
+                                        <div className="bg-blue-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${opt.resonance * 100}%` }}></div>
+                                    </div>
+                                </div>
+                            ))}
+                            <div className="text-center pt-4 border-t border-gray-700 mt-4">
+                                <p className="text-gray-400">Optimal Decision:</p>
+                                <p className="text-xl font-bold text-blue-300">{decision.best.name}</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * NEW: Integrity & Safeguard Layer (ISL)
+ * Visualizes the Safety Operator projecting states into the safe subspace.
+ */
+function SafetyModule() {
+    const svgRef = useRef(null);
+    const [state, setState] = useState({ x: 150, y: 150 });
+
+    useEffect(() => {
+        const svg = d3.select(svgRef.current);
+        const width = 400;
+        const height = 300;
+
+        // Define safe zone
+        const safeZone = { x: 50, y: 50, width: 300, height: 200 };
+        svg.select(".safe-zone").remove();
+        svg.append("rect")
+            .attr("class", "safe-zone")
+            .attr("x", safeZone.x)
+            .attr("y", safeZone.y)
+            .attr("width", safeZone.width)
+            .attr("height", safeZone.height)
+            .attr("fill", "rgba(74, 222, 128, 0.1)")
+            .attr("stroke", "#4ade80");
+
+        // State point
+        const point = svg.selectAll(".state-point").data([state]);
+        point.enter().append("circle")
+            .attr("class", "state-point")
+            .attr("r", 8)
+            .attr("fill", "#8b5cf6")
+            .merge(point)
+            .transition().duration(500)
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+
+    }, [state]);
+
+    const perturbState = () => {
+        const newState = {
+            x: Math.random() * 400,
+            y: Math.random() * 300,
+        };
+        setState(newState);
+
+        // Check if state is unsafe and project it back
+        setTimeout(() => {
+            const safeZone = { x: 50, y: 50, width: 300, height: 200 };
+            if (newState.x < safeZone.x || newState.x > safeZone.x + safeZone.width ||
+                newState.y < safeZone.y || newState.y > safeZone.y + safeZone.height) {
+                
+                const projectedState = {
+                    x: Math.max(safeZone.x, Math.min(newState.x, safeZone.x + safeZone.width)),
+                    y: Math.max(safeZone.y, Math.min(newState.y, safeZone.y + safeZone.height)),
+                };
+                setState(projectedState);
+            }
+        }, 600);
+    };
+
+    return (
+        <div className="text-white">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-shield-halved mr-3 text-red-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-red-400">Integrity & Safeguard Layer</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Visualizes the Safety Operator ($\mathcal{S}$) ensuring the AGI's state remains within the provably safe subspace. Unsafe states are automatically projected back to the safe boundary.</p>
+            <div className="bg-gray-800 p-4 rounded-lg">
+                <svg ref={svgRef} width="400" height="300" className="mx-auto bg-gray-900 rounded"></svg>
+                <div className="text-center mt-4">
+                    <button onClick={perturbState} className="bg-red-600 hover:bg-red-500 px-4 py-2 rounded">Perturb State</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * NEW: Biological Simulation Engine
+ * Simulates cellular processes based on the provided Python logic.
+ */
+function BioSimEngine() {
+    const [simState, setSimState] = useState({ running: false, step: 0, cells: [], health: 100 });
+    const simInterval = useRef(null);
+
+    const initializeSim = () => {
+        const newCells = Array.from({ length: 100 }, (_, i) => ({
+            id: i,
+            energy: Math.random() * 0.3 + 0.7,
+            age: 0,
+            type: Math.random() > 0.7 ? 'neuron' : 'generic'
+        }));
+        setSimState({ running: true, step: 0, cells: newCells, health: 100 });
+    };
+
+    useEffect(() => {
+        if (simState.running) {
+            simInterval.current = setInterval(() => {
+                setSimState(prev => {
+                    if (prev.step >= 200) {
+                        clearInterval(simInterval.current);
+                        return { ...prev, running: false };
+                    }
+                    const newCells = prev.cells.map(cell => {
+                        let newEnergy = cell.energy - 0.01; // consumption
+                        if (newEnergy < 0.5) newEnergy += 0.02; // replenishment
+                        return { ...cell, energy: Math.max(0, Math.min(1, newEnergy)), age: cell.age + 1 };
+                    });
+                    const avgEnergy = newCells.reduce((sum, c) => sum + c.energy, 0) / newCells.length;
+                    return { ...prev, step: prev.step + 1, cells: newCells, health: avgEnergy * 100 };
+                });
+            }, 100);
+        }
+        return () => clearInterval(simInterval.current);
+    }, [simState.running]);
+
+    return (
+        <div className="text-white">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-dna mr-3 text-cyan-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-cyan-400">Biological Simulation Engine</h1>
+            </div>
+            <p className="text-gray-400 mb-4">A simplified simulation of cellular processes, including energy management and aging, based on the advanced biological engine concepts.</p>
+            <div className="bg-gray-800 p-4 rounded-lg">
+                <div className="flex justify-between items-center mb-4">
+                    <button onClick={() => !simState.running && initializeSim()} disabled={simState.running} className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 px-4 py-2 rounded">
+                        {simState.running ? 'Running...' : 'Initialize & Run'}
+                    </button>
+                    <div>
+                        <span className="mr-4">Step: {simState.step}/200</span>
+                        <span>Overall Health: <span className="font-bold">{simState.health.toFixed(1)}%</span></span>
+                    </div>
+                </div>
+                <div className="w-full h-64 bg-gray-900 rounded grid grid-cols-10 grid-rows-10 gap-1 p-1">
+                    {simState.cells.map(cell => (
+                        <div key={cell.id} className="rounded-sm" style={{ 
+                            backgroundColor: cell.type === 'neuron' ? '#8b5cf6' : '#34d399',
+                            opacity: cell.energy 
+                        }}></div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * NEW: Blockchain Simulation (Proof-of-Harmonics)
+ * Visualizes and compares PoH with PoW.
+ */
+function BlockchainSim() {
+    const [blocks, setBlocks] = useState({ poh: [], pow: [] });
+    const intervalRef = useRef(null);
+
+    useEffect(() => {
+        intervalRef.current = setInterval(() => {
+            setBlocks(prev => {
+                const newPoh = [...prev.poh, { id: prev.poh.length, hash: `~${generateId()}` }];
+                const newPow = Math.random() < 0.2 ? [...prev.pow, { id: prev.pow.length, hash: generateId() }] : prev.pow;
+                return { poh: newPoh, pow: newPow };
+            });
+        }, 1000);
+        return () => clearInterval(intervalRef.current);
+    }, []);
+
+    return (
+        <div className="text-white">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-link mr-3 text-yellow-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-yellow-400">Harmonic Blockchain Simulation</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Comparing the efficiency of Proof-of-Harmonics (PoH) against traditional Proof-of-Work (PoW). PoH uses waveform signatures for near-instant validation.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 className="text-lg font-semibold mb-2 text-center">Proof-of-Harmonics (PoH)</h3>
+                    <div className="h-96 bg-gray-800 p-2 rounded-lg overflow-y-auto flex flex-col-reverse">
+                        {blocks.poh.slice().reverse().map(b => (
+                            <div key={b.id} className="bg-yellow-800/50 p-2 rounded mb-2 text-xs font-mono">
+                                <div>Block: {b.id}</div>
+                                <div>Hash: {b.hash}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="text-center mt-2">Efficiency: High | Speed: ~1 block/sec</div>
+                </div>
+                <div>
+                    <h3 className="text-lg font-semibold mb-2 text-center">Proof-of-Work (PoW)</h3>
+                    <div className="h-96 bg-gray-800 p-2 rounded-lg overflow-y-auto flex flex-col-reverse">
+                        {blocks.pow.slice().reverse().map(b => (
+                            <div key={b.id} className="bg-gray-700 p-2 rounded mb-2 text-xs font-mono">
+                                <div>Block: {b.id}</div>
+                                <div>Hash: {b.hash}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="text-center mt-2">Efficiency: Low | Speed: ~1 block/5 sec</div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * NEW: Physics & Energy Simulation
+ * Simulates wireless power transfer.
+ */
+function PhysicsEngine() {
+    const data = [
+        { dist: 1, standard: 85, harmonic: 95 }, { dist: 2, standard: 60, harmonic: 88 },
+        { dist: 3, standard: 40, harmonic: 82 }, { dist: 4, standard: 25, harmonic: 75 },
+        { dist: 5, standard: 15, harmonic: 68 }, { dist: 6, standard: 8, harmonic: 60 },
+        { dist: 7, standard: 4, harmonic: 55 }, { dist: 8, standard: 2, harmonic: 51 },
+    ];
+
+    return (
+        <div className="text-white">
+            <div className="flex items-center mb-4">
+                <i className="fas fa-satellite-dish mr-3 text-orange-400 text-2xl"></i>
+                <h1 className="text-3xl font-bold text-orange-400">Physics Engine: Wireless Power</h1>
+            </div>
+            <p className="text-gray-400 mb-4">Simulating the efficiency of wireless power transfer, comparing standard resonance with the Harmonic Algebra optimized approach which maintains high efficiency over greater distances.</p>
+            <div className="bg-gray-800 p-4 rounded-lg h-96">
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#4b5563" />
+                        <XAxis dataKey="dist" stroke="#9ca3af" label={{ value: 'Distance (m)', position: 'insideBottom', offset: -5, fill: '#9ca3af' }} />
+                        <YAxis stroke="#9ca3af" label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fill: '#9ca3af' }} />
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #4b5563' }} />
+                        <Legend />
+                        <Line type="monotone" dataKey="standard" stroke="#f97316" strokeWidth={2} name="Standard" />
+                        <Line type="monotone" dataKey="harmonic" stroke="#38bdf8" strokeWidth={2} name="HA-Optimized" />
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+}
+
+
+ // --- PROVIDER & MAIN APP COMPONENTS (MODIFIED) ---
+
+ function AuthProvider({ children }) {
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
+  const [user, setUser] = useState({ username: "Demo User" });
+  const login = () => setIsLoggedIn(true);
+  const signup = () => setIsLoggedIn(true);
+  const logout = () => setIsLoggedIn(false);
+  return <AuthContext.Provider value={{ isLoggedIn, user, login, signup, logout }}>{children}</AuthContext.Provider>;
+ }
+
+ function ConversationProvider({ children }) {
+    const [conversations, setConversations] = useState([]);
+    const [currentConversationId, setCurrentConversationId] = useState(null);
+    const [proactiveThoughts, setProactiveThoughts] = useState([]);
+    const { isLoggedIn } = useContext(AuthContext);
+
+    useEffect(() => {
+        if (isLoggedIn && conversations.length === 0) startNewConversation();
+        else if (!isLoggedIn) {
+            setConversations([]);
+            setCurrentConversationId(null);
+            setProactiveThoughts([]);
+        }
+    }, [isLoggedIn]);
+
+    const startNewConversation = () => {
+        const newConvId = generateId();
+        const newConversation = { id: newConvId, title: `Chat ${conversations.length + 1}`, messages: [] };
+        setConversations(prev => [...prev, newConversation]);
+        setCurrentConversationId(newConvId);
+    };
+    const selectConversation = id => setCurrentConversationId(id);
+    const addMessage = message => {
+        setConversations(prev => prev.map(conv =>
+            conv.id === currentConversationId ? { ...conv, messages: [...conv.messages, { ...message, id: message.id || generateId() }] } : conv
+        ));
+    };
+    const updateMessage = (id, text, isStreaming = true) => {
+        setConversations(prev => prev.map(conv =>
+            conv.id === currentConversationId ? { ...conv, messages: conv.messages.map(msg => msg.id === id ? { ...msg, text, isStreaming } : msg) } : conv
+        ));
+    };
+    const addProactiveThought = thought => setProactiveThoughts(prev => [...prev.slice(-10), thought]);
+    const getCurrentConversation = () => conversations.find(conv => conv.id === currentConversationId);
+
+    return (
+        <ConversationContext.Provider value={{ conversations, currentConversationId, proactiveThoughts, startNewConversation, selectConversation, addMessage, updateMessage, addProactiveThought, getCurrentConversation }}>
+            {children}
+        </ConversationContext.Provider>
+    );
+ }
+
+ function App() {
+  const [settings, setSettings] = useState(defaultSettings);
+  const [drawer, setDrawer] = useState(false);
+  const [tab, setTab] = useState("rce"); // Default to RCE
+  const { isLoggedIn, logout, user } = useContext(AuthContext);
+  const { conversations, currentConversationId, selectConversation, startNewConversation, addProactiveThought, getCurrentConversation, proactiveThoughts } = useContext(ConversationContext);
+
+  const setAllSettings = vals => setSettings(vals);
+
+  useEffect(() => {
+   let intervalId;
+   if (settings.proactive && isLoggedIn) {
+    intervalId = setInterval(async () => {
+        const currentConversation = getCurrentConversation();
+        if (!currentConversation || currentConversation.messages.length === 0) return;
+        const prompt = `Based on the last message: "${currentConversation.messages.slice(-1)[0].text}", generate a concise proactive thought (Hypothesis, Experiment, Connection, or Self-Reflection).`;
+        try {
+            const thoughtText = await callGenerativeAPI(prompt, [], null, settings);
+            addProactiveThought({ text: thoughtText, timestamp: new Date().toISOString() });
+        } catch (error) { console.error("Error generating thought:", error); }
+    }, settings.interval);
+   }
+   return () => clearInterval(intervalId);
+  }, [settings.proactive, settings.interval, isLoggedIn, currentConversationId]);
+
+  if (!isLoggedIn) {
+   return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
+     <div className="text-center p-8 bg-gray-800 rounded-lg shadow-2xl">
+      <h1 className="text-4xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">Resonant Unified Intelligence System</h1>
+      <p className="text-gray-400">You have been logged out.</p>
+     </div>
+    </div>
+   );
+  }
+  
+  const renderTabContent = () => {
+    switch(tab) {
+        case "chat": return <Chat />;
+        case "rce": return <ResonantCognitionEngine />;
+        case "ahde": return <AdaptiveHarmonicDecisionEngine />;
+        case "qrit": return <QuantumResonanceTopologyModule />;
+        case "isl": return <SafetyModule />;
+        case "biosim": return <BioSimEngine />;
+        case "blockchain": return <BlockchainSim />;
+        case "physics": return <PhysicsEngine />;
+        default: return <ResonantCognitionEngine />;
+    }
+  };
+
+  const TABS = [
+      { id: "chat", name: "Chat", icon: "fa-comments" },
+      { id: "rce", name: "Cognition Engine", icon: "fa-atom" },
+      { id: "ahde", name: "Decision Engine", icon: "fa-brain" },
+      { id: "qrit", name: "Topology", icon: "fa-project-diagram" },
+      { id: "isl", name: "Safety Layer", icon: "fa-shield-halved" },
+      { id: "biosim", name: "Bio-Sim", icon: "fa-dna" },
+      { id: "blockchain", name: "Blockchain", icon: "fa-link" },
+      { id: "physics", name: "Physics Sim", icon: "fa-satellite-dish" },
+  ];
+
+  return (
+   <SettingsContext.Provider value={{ ...settings, setAll: setAllSettings }}>
+    <div className="flex h-screen bg-gray-800 text-white">
+     <aside className="w-64 bg-gray-900 p-4 space-y-4 flex flex-col">
+      <div className="text-center mb-4">
+       <h2 className="text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">RUIS Interface</h2>
+       <p className="text-xs text-gray-400">Welcome, {user.username}</p>
+      </div>
+      
+      <div className="border-t border-gray-700 pt-4">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Modules</h3>
+        <div className="space-y-1">
+            {TABS.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center w-full text-left px-3 py-2 rounded text-sm ${tab === t.id ? 'bg-gray-700 font-medium' : 'hover:bg-gray-700'}`}>
+                    <i className={`fas ${t.icon} w-6 text-center`}></i> {t.name}
+                </button>
+            ))}
+        </div>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto space-y-1 pr-2 mt-4 border-t border-gray-700 pt-4">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Conversations</h3>
+        <button onClick={startNewConversation} className="bg-purple-600 hover:bg-purple-700 w-full py-2 rounded text-white text-sm">+ New Chat</button>
+        {conversations.map(conv => (
+            <button key={conv.id} onClick={() => selectConversation(conv.id)} className={`block w-full text-left px-3 py-2 rounded text-sm mt-1 ${conv.id === currentConversationId ? 'bg-gray-700 font-medium' : 'hover:bg-gray-700'}`}>
+            {conv.title || `Chat ${conv.id.slice(0, 6)}`}
+            </button>
+        ))}
+      </div>
+
+       <div className="pt-4 mt-4 border-t border-gray-700 space-y-2">
+        <button onClick={() => setDrawer(true)} className="flex items-center bg-gray-700 hover:bg-gray-600 w-full py-2 rounded text-white text-sm"><i className="fas fa-cog w-6 text-center"></i> Settings</button>
+        <button onClick={logout} className="flex items-center bg-red-800 hover:bg-red-700 w-full py-2 rounded text-white text-sm"><i className="fas fa-door-open w-6 text-center"></i> Logout</button>
+       </div>
+     </aside>
+     <main className="flex-1 p-6 overflow-auto bg-gray-800">
+      {renderTabContent()}
+     </main>
+     {/* SettingsDrawer component remains the same */}
+    </div>
+   </SettingsContext.Provider>
+  );
+ }
+ 
+ // The Chat component remains largely the same, but is included here for completeness
+ function Chat() {
+  const [text, setText] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const chatContainerRef = useRef(null);
+  const settings = useContext(SettingsContext);
+  const { currentConversationId, addMessage, getCurrentConversation, updateMessage } = useContext(ConversationContext);
+
+  const currentConversation = getCurrentConversation();
+  const msgs = currentConversation ? currentConversation.messages : [];
+
+  const scrollToBottom = () => {
+   if (chatContainerRef.current) {
+    chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+   }
+  };
+
+  useEffect(scrollToBottom, [msgs]);
+
+  const sendMessage = async (content) => {
+   if (!content.trim() || !currentConversationId) return;
+   const userMessage = { role: "user", text: content };
+   addMessage(userMessage);
+   setText("");
+   
+   const streamingId = generateId();
+   addMessage({ role: "assistant", text: "", id: streamingId, isStreaming: true });
+   setIsStreaming(true);
+
+   try {
+    const history = msgs.map(msg => ({
+     role: msg.role === "user" ? "user" : "model",
+     parts: [{ text: msg.text }]
+    }));
+    const fullText = await callGenerativeAPI(content, history, null, settings);
+    updateMessage(streamingId, fullText, false);
+    if (settings.tts) speak(fullText);
+   } catch (error) {
+    const errorText = `[AI Error] An error occurred: ${error.message}`;
+    updateMessage(streamingId, errorText, false);
+   } finally {
+    setIsStreaming(false);
+   }
+  };
+  
+  return (
+   <div className="flex flex-col h-full text-white">
+    <div className="flex-1 overflow-y-auto space-y-3 mb-4 p-3 bg-gray-900/50 rounded" ref={chatContainerRef}>
+     {msgs.map((m, i) => (
+      <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+       <div className={`max-w-[85%] p-3 rounded-lg ${m.role === 'user' ? 'bg-purple-600' : 'bg-gray-600'}`}>
+        {m.text}
+       </div>
+      </div>
+     ))}
+    </div>
+    <div className="flex space-x-2">
+      <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendMessage(text))} className="flex-1 bg-gray-700 p-3 rounded text-white resize-none" placeholder="Type your message..." />
+      <button onClick={() => sendMessage(text)} disabled={isStreaming || !text.trim()} className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-4 py-2 rounded text-white">Send</button>
+    </div>
+   </div>
+  );
+ }
+
+
+ // --- FINAL RENDER ---
+ function UnifiedAGIStudio() {
+  return (
+   <AuthProvider>
+    <ConversationProvider>
+     <App />
+    </ConversationProvider>
+   </AuthProvider>
+  );
+ }
+
+ const container = document.getElementById('root');
+ const root = ReactDOM.createRoot(container);
+ root.render(<UnifiedAGIStudio />);
+
+    </script>
+</body>
+</html>

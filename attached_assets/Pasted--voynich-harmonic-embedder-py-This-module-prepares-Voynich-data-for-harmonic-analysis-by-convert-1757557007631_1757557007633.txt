@@ -1,0 +1,116 @@
+# voynich_harmonic_embedder.py
+# This module prepares Voynich data for harmonic analysis by converting
+# tokens into multi-dimensional embeddings, the first step towards applying
+# the Hodge filter and other concepts from the Harmonic Algebra framework.
+
+import hashlib
+import numpy as np
+import json
+
+# Placeholder for the Standard Token Alphabet (STA)
+# In a real system, this would be a complete, well-defined mapping of all Voynich glyphs.
+STA_MAPPING = {
+    'qokedy': 1, 'dal': 2, 'shol': 3, 'aiin': 4, 'iin': 5, 'eee': 6,
+    'chedy': 7, 'shedy': 8, 'kedy': 9, 'qo': 10, 'ar': 11, 'ol': 12,
+    'dy': 13, 'fachys': 14, 'ykal': 15, 'at': 16, 'aiin': 17, 'shory': 18,
+    'cthres': 19, 'y': 20, 'kor': 21, 'sholdy': 22, 'dain': 23, 'sheky': 24,
+    'kol': 25, 'cheal': 26, 'chol': 27, 'qotedy': 28, 'qokain': 29, 'fchedy': 30,
+    'edy': 31, 'or': 32, 'al': 33, 'sho': 34, 'cho': 35, 'she': 36, 'che': 37,
+    'dar': 38, 'shear': 39, 'qol': 40, 'dair': 41, 'shey': 42, 'sheol': 43,
+    'chor': 44, 'shor': 45, 'ytain': 46, 'ykaiin': 47, 'ytor': 48, 'ytol': 49,
+    'sal': 50, 'daiin': 51, 'qotchedy': 52, 'qockhedy': 53, 'thor': 54, 'fhor': 55
+}
+
+class HarmonicEmbedder:
+    """
+    Converts a sequence of Voynich tokens into harmonic embeddings.
+    """
+    def __init__(self, sta_mapping: dict, embedding_dim: int = 101):
+        """
+        Initializes the embedder with a STA mapping and embedding dimension.
+        The 101-dimensional space is based on the Hodge diamond concepts
+        from your provided documents.
+        """
+        self.sta_mapping = sta_mapping
+        self.embedding_dim = embedding_dim
+        self.embedding_cache = {}
+
+    def _generate_harmonic_vector(self, token: str) -> np.ndarray:
+        """
+        Generates a unique, high-dimensional vector for a given token.
+        This is a placeholder for a more complex process that would involve
+        the Quantum-Harmonic Constraint Solver (HCS) to learn the embeddings.
+        For now, we use a simple, deterministic approach based on hashing.
+        """
+        # A deterministic hash ensures the same token always gets the same vector
+        token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+        np.random.seed(int(token_hash[:8], 16)) # Use a portion of the hash as a seed
+        
+        # This is a random vector, but in the final model, it would be a learned,
+        # topologically coherent harmonic embedding.
+        vector = np.random.rand(self.embedding_dim) - 0.5
+        
+        return vector
+
+    def get_embedding(self, token: str) -> np.ndarray:
+        """
+        Retrieves the harmonic embedding for a token, using a cache to
+        avoid recomputing.
+        """
+        if token not in self.embedding_cache:
+            if token not in self.sta_mapping:
+                print(f"Warning: Token '{token}' not found in STA mapping. Generating a random vector.")
+                self.sta_mapping[token] = len(self.sta_mapping) + 1
+            
+            self.embedding_cache[token] = self._generate_harmonic_vector(token)
+            
+        return self.embedding_cache[token]
+
+    def embed_corpus(self, corpus_tokens: list) -> list:
+        """
+        Converts an entire list of tokenized words into a list of
+        harmonic embeddings.
+        """
+        embeddings = []
+        for word in corpus_tokens:
+            word_embedding = [self.get_embedding(token) for token in word]
+            embeddings.append(word_embedding)
+        return embeddings
+
+# --- Example Usage ---
+def main():
+    """
+    Example run to demonstrate the harmonic embedding process.
+    """
+    print("--- Starting Harmonic Embedding Demonstration ---")
+    
+    # 1. Prepare sample data (from the test output)
+    sample_corpus = [
+        ['qokedy', 'dal', 'qokedy', 'qokedy'],
+        ['chedy', 'qo', 'shedy', 'qo', 'kedy', 'qo', 'edy', 'qo', 'dy'],
+        ['sal', 'daiin', 'sal', 'shol', 'sal', 'chol']
+    ]
+
+    # 2. Initialize the embedder
+    embedder = HarmonicEmbedder(sta_mapping=STA_MAPPING)
+
+    # 3. Embed the sample corpus
+    embedded_corpus = embedder.embed_corpus(sample_corpus)
+    
+    # 4. Print results (high-level, to avoid showing raw vectors)
+    print("\nCorpus successfully tokenized into harmonic embeddings.")
+    print(f"Total words embedded: {len(embedded_corpus)}")
+    
+    # The first word's embedding (qokedy dal qokedy qokedy)
+    first_word_embeddings = embedded_corpus[0]
+    
+    print("\nSample embedding analysis (first word):")
+    for i, embedding in enumerate(first_word_embeddings):
+        print(f"Token '{sample_corpus[0][i]}' -> Embedding of shape {embedding.shape}")
+
+    # Now, we would run the core harmonic analysis functions here
+    # to find the "phase-locked states" and "resonant facets"
+    # that signify a meaningful structure.
+
+if __name__ == "__main__":
+    main()

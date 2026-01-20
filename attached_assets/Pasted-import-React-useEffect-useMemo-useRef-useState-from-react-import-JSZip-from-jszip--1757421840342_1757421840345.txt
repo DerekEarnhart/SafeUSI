@@ -1,0 +1,949 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import JSZip from "jszip";
+
+// --------------------------------------------------------------------------------------
+// NOTE: We do NOT import `file-saver`. Some sandboxes expose no named `saveAs` export.
+// We ship a tiny, robust downloader instead.
+// --------------------------------------------------------------------------------------
+
+/** Build a download link for a blob without triggering it. Useful for tests. */
+function buildDownloadLink(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  return { a, url };
+}
+
+/** Save a blob to the user's machine (anchor + objectURL fallback). */
+function saveBlob(blob: Blob, filename: string) {
+  const { a, url } = buildDownloadLink(blob, filename);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// --------------------------------------------------------------------------------------
+// Small UI bits
+// --------------------------------------------------------------------------------------
+
+const Icon = ({ label }: { label: string }) => (
+  <span className="px-2 py-0.5 rounded bg-black/20 border border-white/10 text-xs font-mono select-none">{label}</span>
+);
+
+function classNames(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function formatBytes(n: number) {
+  if (!isFinite(n)) return String(n);
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+function useToast() {
+  const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err" } | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 3200);
+    return () => clearTimeout(id);
+  }, [toast]);
+  return { toast, show: setToast } as const;
+}
+
+const b64 = {
+  set: (k: string, v: string) => localStorage.setItem(k, btoa(v)),
+  get: (k: string) => {
+    const v = localStorage.getItem(k);
+    try { return v ? atob(v) : ""; } catch { return ""; }
+  },
+  del: (k: string) => localStorage.removeItem(k),
+};
+
+// --------------------------------------------------------------------------------------
+// Settings / Provider plumbing
+// --------------------------------------------------------------------------------------
+
+type Provider = "openai" | "gemini";
+
+type Settings = {
+  provider: Provider;
+  openaiKey: string;
+  openaiModel: string;
+  geminiKey: string;
+  geminiModel: string;
+};
+
+const DEFAULTS: Settings = {
+  provider: "openai",
+  openaiKey: "",
+  openaiModel: "gpt-4o-mini",
+  geminiKey: "",
+  geminiModel: "gemini-2.0-flash",
+};
+
+const SETTINGS_KEYS = {
+  provider: "hpa.provider",
+  openaiKey: "hpa.openaiKey",
+  openaiModel: "hpa.openaiModel",
+  geminiKey: "hpa.geminiKey",
+  geminiModel: "hpa.geminiModel",
+} as const;
+
+function loadSettings(): Settings {
+  return {
+    provider: (localStorage.getItem(SETTINGS_KEYS.provider) as Provider) || DEFAULTS.provider,
+    openaiKey: b64.get(SETTINGS_KEYS.openaiKey),
+    openaiModel: localStorage.getItem(SETTINGS_KEYS.openaiModel) || DEFAULTS.openaiModel,
+    geminiKey: b64.get(SETTINGS_KEYS.geminiKey),
+    geminiModel: localStorage.getItem(SETTINGS_KEYS.geminiModel) || DEFAULTS.geminiModel,
+  };
+}
+
+function saveSettings(s: Settings) {
+  localStorage.setItem(SETTINGS_KEYS.provider, s.provider);
+  localStorage.setItem(SETTINGS_KEYS.openaiModel, s.openaiModel);
+  localStorage.setItem(SETTINGS_KEYS.geminiModel, s.geminiModel);
+  if (s.openaiKey) b64.set(SETTINGS_KEYS.openaiKey, s.openaiKey);
+  if (s.geminiKey) b64.set(SETTINGS_KEYS.geminiKey, s.geminiKey);
+}
+
+// --------------------------------------------------------------------------------------
+// Robust JSON extraction and normalization
+// --------------------------------------------------------------------------------------
+
+function extractJSONObject(text: string) {
+  let start = -1; let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") { if (depth === 0) start = i; depth++; }
+    else if (ch === "}") { depth--; if (depth === 0 && start >= 0) { const json = text.slice(start, i + 1); try { return JSON.parse(json); } catch {} } }
+  }
+  throw new Error("Could not locate valid JSON object in model response.");
+}
+
+function normalizeProjectData(input: any) {
+  if (!input || typeof input !== "object") throw new Error("Expected a JSON object, got nothing or a non-object.");
+
+  const projectNameRaw = String((input as any).projectName || (input as any).name || (input as any).title || (input as any).project || "").trim();
+
+  const filesCandidate = (input as any).files || (input as any).documents || (input as any).items || (input as any).artifacts;
+  const filesRaw: any[] = Array.isArray(filesCandidate)
+    ? filesCandidate
+    : (filesCandidate && typeof filesCandidate === "object")
+      ? Object.entries(filesCandidate).map(([k, v]: any) => ({ path: k, content: (v && (v.content ?? v.text ?? v.body ?? v.data)) ?? v }))
+      : null as any;
+
+  if (!filesRaw) {
+    const keys = Object.keys(input).slice(0, 10).join(", ");
+    throw new Error(`Missing files array. Top-level keys seen: [${keys}]`);
+  }
+
+  const files = filesRaw
+    .map((f: any) => {
+      if (!f || typeof f !== "object") return null;
+      const path = String((f.path || f.filepath || f.filename || f.name || "").toString()).trim();
+      let content: any = (f.content ?? f.text ?? f.body ?? f.data ?? "");
+      if (content && typeof content !== "string") {
+        try { content = JSON.stringify(content, null, 2); } catch { content = String(content); }
+      }
+      if (!path || typeof content !== "string") return null;
+      return { path, content };
+    })
+    .filter(Boolean) as { path: string; content: string }[];
+
+  if (!files.length) throw new Error("No valid file entries with {path, content} found.");
+
+  const firstPath = files[0].path || "Project";
+  const safeHead = firstPath.split("/")[0].replace(/[^a-zA-Z0-9_-]+/g, "");
+  const safeName = projectNameRaw || safeHead || "Project";
+  const projectName = safeName || `Project-${Date.now()}`;
+
+  return { projectName, files } as { projectName: string; files: { path: string; content: string }[] };
+}
+
+// --------------------------------------------------------------------------------------
+// Provider calls (fetch-only)
+// --------------------------------------------------------------------------------------
+
+async function callOpenAI(opts: { apiKey: string; model: string; prompt: string; images?: string[]; json?: boolean }) {
+  const { apiKey, model, prompt, images, json } = opts;
+  const url = "https://api.openai.com/v1/chat/completions";
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` } as const;
+
+  const content: any[] = [{ type: "text", text: prompt }];
+  if (images && images.length > 0) {
+    for (const dataUrl of images) content.push({ type: "input_image", image_url: { url: dataUrl } });
+  }
+  const body: any = { model, messages: [{ role: "user", content }], temperature: 0.2 };
+  if (json) body.response_format = { type: "json_object" };
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) { const msg = await res.text(); throw new Error(`OpenAI ${res.status}: ${msg}`); }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Empty OpenAI response");
+  return String(text);
+}
+
+async function callGemini(opts: { apiKey: string; model: string; prompt: string; images?: string[]; json?: boolean }) {
+  const { apiKey, model, prompt, images, json } = opts;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const headers = { "Content-Type": "application/json" } as const;
+
+  const parts: any[] = [{ text: prompt }];
+  if (images && images.length > 0) {
+    for (const dataUrl of images) {
+      const [meta, b64] = dataUrl.split(",");
+      const mt = meta.substring(meta.indexOf(":") + 1, meta.indexOf(";"));
+      parts.push({ inlineData: { mimeType: mt, data: b64 } });
+    }
+  }
+
+  const payload: any = { contents: [{ role: "user", parts }] };
+  if (json) payload.generationConfig = { responseMimeType: "application/json" };
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+  if (!res.ok) { const msg = await res.text(); throw new Error(`Gemini ${res.status}: ${msg}`); }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Empty Gemini response");
+  return String(text);
+}
+
+async function callModel(settings: Settings, prompt: string, opts?: { images?: string[]; expectJSON?: boolean }) {
+  const provider = settings.provider;
+  const json = !!opts?.expectJSON;
+  const images = opts?.images;
+
+  if (provider === "openai") {
+    if (!settings.openaiKey) throw new Error("Missing OpenAI API key");
+    return await callOpenAI({ apiKey: settings.openaiKey, model: settings.openaiModel, prompt, images, json });
+    
+  } else {
+    if (!settings.geminiKey) throw new Error("Missing Gemini API key");
+    return await callGemini({ apiKey: settings.geminiKey, model: settings.geminiModel, prompt, images, json });
+  }
+}
+
+// --------------------------------------------------------------------------------------
+// Demo mode (offline)
+// --------------------------------------------------------------------------------------
+
+const Demo = {
+  architect(spec: string) {
+    return {
+      projectName: "DemoProject",
+      files: [
+        { path: "README.md", content: `# DemoProject\n\nGenerated offline. Spec: ${spec.slice(0, 60)}...` },
+        { path: "requirements.txt", content: "requests\nfastapi" },
+        { path: "src/main.py", content: "print('Hello from demo mode')\n" },
+      ],
+    };
+  },
+  analyze(files: File[]) {
+    const total = files.reduce((a, f) => a + f.size, 0);
+    const names = files.map(f => (f as any).webkitRelativePath || f.name).slice(0, 6).join(", ");
+    return `Offline analysis: ${files.length} file(s) (${formatBytes(total)}): ${names}${files.length > 6 ? ", …" : ""}. In online mode, the model would receive a manifest + sampled contents.`;
+  },
+  translate(text: string, target: string) {
+    return `(${target}) [DEMO TRANSLATION] ${text}`;
+  },
+};
+
+// --------------------------------------------------------------------------------------
+// Multi-file helpers (sampling & manifests)
+// --------------------------------------------------------------------------------------
+
+const TEXT_LIKE = /^(text\/|application\/(json|xml|x-www-form-urlencoded|javascript|typescript))/i;
+const IMAGE_LIKE = /^image\//i;
+
+async function blobToText(b: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = (e) => reject(e);
+    r.readAsText(b);
+  });
+}
+
+async function readTextHeadTail(file: File, headBytes = 64 * 1024, tailBytes = 16 * 1024) {
+  const size = file.size;
+  if (size === 0) return "";
+  const head = file.slice(0, Math.min(headBytes, size));
+  const tail = size > headBytes ? file.slice(Math.max(0, size - tailBytes), size) : new Blob([]);
+  const [headText, tailText] = await Promise.all([blobToText(head), blobToText(tail)]);
+  return size > headBytes ? `${headText}\n\n…\n\n${tailText}` : headText;
+}
+
+async function fileToDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = (e) => reject(e);
+    reader.readAsDataURL(file);
+  });
+}
+
+function manifestForFiles(files: File[]) {
+  const lines: string[] = [];
+  lines.push(`# File Manifest`);
+  for (const f of files) {
+    const path = (f as any).webkitRelativePath || f.name;
+    lines.push(`- ${path} • ${f.type || "(unknown)"} • ${formatBytes(f.size)}`);
+  }
+  return lines.join("\n");
+}
+
+async function buildPromptFromFiles(
+  files: File[],
+  question: string,
+  cfg: { maxTextFiles: number; headKB: number; tailKB: number; maxImages: number; }
+) {
+  const { maxTextFiles, headKB, tailKB, maxImages } = cfg;
+  const manifest = manifestForFiles(files);
+
+  const textFiles = files.filter(f => TEXT_LIKE.test(f.type)).slice(0, maxTextFiles);
+  const imageFiles = files.filter(f => IMAGE_LIKE.test(f.type)).slice(0, maxImages);
+
+  const sampledTexts: string[] = [];
+  for (const f of textFiles) {
+    const path = (f as any).webkitRelativePath || f.name;
+    const content = await readTextHeadTail(f, headKB * 1024, tailKB * 1024);
+    sampledTexts.push(`--- FILE: ${path} (${f.type || "unknown"}, ${formatBytes(f.size)}) ---\n${content}\n--- END FILE ---`);
+  }
+
+  const prompt = [
+    "You are HPA. Analyze the dataset and answer the user's question.",
+    "Start from the manifest, then use the sampled contents. If unsure, say what else you'd need.",
+    `Question: ${question || "Summarize this dataset."}`,
+    "",
+    manifest,
+    "",
+    ...sampledTexts,
+  ].join("\n");
+
+  return { prompt, imageFiles };
+}
+
+// --------------------------------------------------------------------------------------
+// Modals
+// --------------------------------------------------------------------------------------
+
+function SettingsModal({ open, onClose, value, onSave }: { open: boolean; onClose: () => void; value: Settings; onSave: (s: Settings) => void }) {
+  const [local, setLocal] = useState<Settings>(value);
+  useEffect(() => setLocal(value), [value]);
+  const mask = (k: string) => (k ? k.replace(/.(?=.{4})/g, "•") : "");
+
+  return (
+    <div className={classNames("fixed inset-0 z-50", open ? "" : "pointer-events-none hidden")}>      
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(680px,92vw)] rounded-2xl border border-white/10 bg-zinc-900/95 p-6 shadow-2xl">
+        <h2 className="text-xl font-semibold mb-1">Settings</h2>
+        <p className="text-sm text-white/60 mb-4">Keys live only in this browser (localStorage, lightly obfuscated). Choose a provider and model.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="col-span-1 md:col-span-2">
+            <label className="text-sm text-white/70">Provider</label>
+            <div className="mt-1 flex gap-2">
+              {(["openai", "gemini"] as Provider[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setLocal({ ...local, provider: p })}
+                  className={classNames(
+                    "px-3 py-1.5 rounded-lg border text-sm",
+                    local.provider === p ? "bg-white text-black border-white" : "bg-transparent border-white/20 text-white/80 hover:border-white/40"
+                  )}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-white/70">OpenAI model</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.openaiModel}
+              onChange={(e) => setLocal({ ...local, openaiModel: e.target.value })}
+              placeholder="e.g. gpt-4o, gpt-4o-mini"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-white/70">OpenAI API key</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.openaiKey}
+              onChange={(e) => setLocal({ ...local, openaiKey: e.target.value })}
+              placeholder="sk-..."
+              type="password"
+            />
+            {value.openaiKey && (
+              <div className="text-xs text-white/50 mt-1">Saved: {mask(value.openaiKey)}</div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm text-white/70">Gemini model</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.geminiModel}
+              onChange={(e) => setLocal({ ...local, geminiModel: e.target.value })}
+              placeholder="e.g. gemini-2.0-flash"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-white/70">Gemini API key</label>
+            <input
+              className="mt-1 w-full bg-black/30 border border-white/10 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={local.geminiKey}
+              onChange={(e) => setLocal({ ...local, geminiKey: e.target.value })}
+              placeholder="AI..."
+              type="password"
+            />
+            {value.geminiKey && (
+              <div className="text-xs text-white/50 mt-1">Saved: {mask(value.geminiKey)}</div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-between gap-2">
+          <div className="text-xs text-white/50">Tip: Images are best supported via Gemini; text-only works with both providers.</div>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20" onClick={onClose}>Close</button>
+            <button className="px-3 py-2 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300" onClick={() => { onSave(local); onClose(); }}>Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuideModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <div className={classNames("fixed inset-0 z-40", open ? "" : "pointer-events-none hidden")}>
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(760px,94vw)] rounded-2xl border border-white/10 bg-zinc-900/95 p-6 shadow-2xl">
+        <h2 className="text-xl font-semibold mb-2">Quickstart</h2>
+        <ol className="list-decimal pl-5 space-y-2 text-sm text-white/80">
+          <li>Open <b>Settings</b> and paste an API key for <i>OpenAI</i> or <i>Gemini</i>. Pick a model.</li>
+          <li>Use tabs:
+            <ul className="list-disc pl-5 mt-1 space-y-1">
+              <li><b>Architect</b>: Paste a spec, get a JSON bundle of files. We zip & download the project.</li>
+              <li><b>Analyze</b>: Upload multiple files or a folder; ask a question. We send a manifest + sampled contents (+ images).</li>
+              <li><b>Translate</b>: Paste text, pick a language, choose tone; receive a translation only.</li>
+            </ul>
+          </li>
+          <li>No keys? It still works in <b>Demo</b> mode with offline, synthetic outputs.</li>
+        </ol>
+        <div className="mt-4 text-xs text-white/50">Privacy: Keys remain in this browser. Nothing leaves except requests to the selected provider.</div>
+        <div className="mt-5 text-right">
+          <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Step({ idx, title, active, done }: { idx: number; title: string; active?: boolean; done?: boolean }) {
+  return (
+    <div className={classNames("flex items-center gap-3 rounded-xl border p-3", done ? "border-emerald-500/40 bg-emerald-500/5" : active ? "border-cyan-400/50 bg-cyan-400/5" : "border-white/10 bg-white/0")}>
+      <div className={classNames("w-7 h-7 rounded-full grid place-items-center text-xs font-bold",
+        done ? "bg-emerald-500 text-black" : active ? "bg-cyan-400 text-black" : "bg-white/10 text-white/80")}>{idx}</div>
+      <div>
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-xs text-white/60">{done ? "Completed" : active ? "In progress" : "Pending"}</div>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+// App
+// --------------------------------------------------------------------------------------
+
+export default function App() {
+  const [tab, setTab] = useState<"architect" | "analyze" | "translate">("architect");
+  const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const [showSettings, setShowSettings] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
+  const { toast, show } = useToast();
+
+  // Architect
+  const [spec, setSpec] = useState("");
+  const [archBusy, setArchBusy] = useState(false);
+  const [archLog, setArchLog] = useState<string[]>([]);
+  const [strictSchema, setStrictSchema] = useState(false);
+
+  // Analyze
+  const [files, setFiles] = useState<File[]>([]);
+  const [dropActive, setDropActive] = useState(false);
+  const totalBytes = useMemo(() => files.reduce((a, f) => a + f.size, 0), [files]);
+  const [question, setQuestion] = useState("");
+  const [analysis, setAnalysis] = useState("");
+  const [anBusy, setAnBusy] = useState(false);
+  // Expanded limits to support larger datasets; tune as desired.
+  const [cfgHeadKB, setCfgHeadKB] = useState(256);
+  const [cfgTailKB, setCfgTailKB] = useState(64);
+  const [cfgMaxTextFiles, setCfgMaxTextFiles] = useState(16);
+  const [cfgMaxImages, setCfgMaxImages] = useState(8);
+
+  // Translate
+  const [srcText, setSrcText] = useState("");
+  const [targetLang, setTargetLang] = useState("es");
+  const [tone, setTone] = useState("neutral");
+  const [translated, setTranslated] = useState("");
+  const [trBusy, setTrBusy] = useState(false);
+
+  // Tests
+  const [testsLog, setTestsLog] = useState<string>("");
+
+  const hasAnyKey = !!(settings.openaiKey || settings.geminiKey);
+
+  useEffect(() => { document.title = "Harmonic Project Architect — Universal Builder v3"; }, []);
+
+  function persist(newSettings: Settings) {
+    setSettings(newSettings);
+    saveSettings(newSettings);
+    show({ kind: "ok", msg: "Settings saved" });
+  }
+
+  async function testConnection() {
+    try {
+      const resp = await callModel(settings, "Reply with the single word: OK", { expectJSON: false });
+      if (/\bOK\b/i.test(resp)) show({ kind: "ok", msg: `${settings.provider.toUpperCase()} reachable` });
+      else show({ kind: "ok", msg: `${settings.provider.toUpperCase()} responded` });
+    } catch (e: any) {
+      show({ kind: "err", msg: String(e.message || e) });
+    }
+  }
+
+  // ---------------- ARCHITECT -----------------
+  async function onArchitect() {
+    setArchBusy(true);
+    setArchLog((l) => [...l, `➡️ Intent: Build from spec (${new Date().toLocaleTimeString()})`]);
+    try {
+      let projectData: any;
+      if (!hasAnyKey) {
+        projectData = Demo.architect(spec);
+      } else {
+        const schemaHint = `Your response MUST be a single JSON object with keys: projectName (string) and files (array of { path, content }). No extra prose.`;
+        const prompt = [
+          "You are Harmonic Project Architect (HPA).",
+          schemaHint,
+          "Rules:",
+          "- Return ONLY JSON.",
+          "- Include README.md and requirements.txt.",
+          "- Use a sensible multi-file structure (src/, public/, etc.).",
+          "- Keep file contents complete (no placeholders like '<...>').",
+          "- Keep code runnable (no missing imports).",
+          "",
+          "User specification:",
+          spec,
+        ].join("\n");
+        const raw = await callModel(settings, prompt, { expectJSON: true });
+        const parsed = (() => { try { return JSON.parse(raw); } catch { return extractJSONObject(raw); } })();
+        projectData = strictSchema ? parsed : normalizeProjectData(parsed);
+      }
+
+      if (strictSchema) {
+        if (!projectData?.projectName || !Array.isArray(projectData?.files)) {
+          // This is the error the user saw; keep the message but now it won't show if we can normalize.
+          throw new Error("❌ Model returned invalid JSON structure.");
+        }
+      }
+
+      const zip = new JSZip();
+      (projectData.files as any[]).forEach((f: any) => zip.file(f.path, f.content));
+      const blob = await zip.generateAsync({ type: "blob" });
+      const fname = `${projectData.projectName || "Project"}.zip`;
+      saveBlob(blob, fname);
+      setArchLog((l) => [...l, `✅ Download started: ${fname}`]);
+      show({ kind: "ok", msg: `Project '${projectData.projectName || "Project"}' ready` });
+    } catch (e: any) {
+      setArchLog((l) => [...l, `❌ ${String(e.message || e)}`]);
+      show({ kind: "err", msg: String(e.message || e) });
+    } finally {
+      setArchBusy(false);
+    }
+  }
+
+  // --------------- ANALYZE (multi-file, folder, large) --------------------
+  function addFiles(list: FileList | File[] | null | undefined) {
+    if (!list) return;
+    const arr = Array.from(list);
+    setFiles((prev) => {
+      const keyed = new Map<string, File>();
+      for (const f of prev) keyed.set(((f as any).webkitRelativePath || f.name) + `@${f.size}`, f);
+      for (const f of arr) keyed.set(((f as any).webkitRelativePath || f.name) + `@${f.size}`, f);
+      return Array.from(keyed.values());
+    });
+  }
+
+  async function onAnalyze() {
+    if (files.length === 0) { show({ kind: "err", msg: "Add files first" }); return; }
+    setAnBusy(true);
+    try {
+      if (!hasAnyKey) { setAnalysis(Demo.analyze(files)); return; }
+      const { prompt, imageFiles } = await buildPromptFromFiles(files, question, {
+        maxTextFiles: cfgMaxTextFiles,
+        headKB: cfgHeadKB,
+        tailKB: cfgTailKB,
+        maxImages: cfgMaxImages,
+      });
+      const images: string[] = [];
+      for (const img of imageFiles) { images.push(await fileToDataURL(img)); }
+      const resp = await callModel(settings, prompt, { images, expectJSON: false });
+      setAnalysis(resp.trim());
+    } catch (e: any) {
+      setAnalysis(`Error: ${String(e.message || e)}`);
+    } finally {
+      setAnBusy(false);
+    }
+  }
+
+  async function bundleSelected() {
+    if (files.length === 0) { show({ kind: "err", msg: "Add files first" }); return; }
+    const zip = new JSZip();
+    for (const f of files) {
+      const path = (f as any).webkitRelativePath || f.name;
+      zip.file(path, f);
+    }
+    const blob = await zip.generateAsync({ type: "blob" });
+    saveBlob(blob, `dataset_${files.length}files.zip`);
+    show({ kind: "ok", msg: "Dataset zip started" });
+  }
+
+  // Drag-n-drop
+  const dropRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = dropRef.current;
+    if (!el) return;
+    const prevent = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
+    const onDragOver = (e: DragEvent) => { prevent(e); setDropActive(true); };
+    const onDragLeave = (e: DragEvent) => { prevent(e); setDropActive(false); };
+    const onDrop = (e: DragEvent) => { prevent(e); setDropActive(false); addFiles(e.dataTransfer?.files || null); };
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("dragleave", onDragLeave);
+    el.addEventListener("drop", onDrop);
+    el.addEventListener("dragenter", prevent);
+    el.addEventListener("dragend", prevent);
+    return () => {
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("dragleave", onDragLeave);
+      el.removeEventListener("drop", onDrop);
+      el.removeEventListener("dragenter", prevent);
+      el.removeEventListener("dragend", prevent);
+    };
+  }, []);
+
+  // ---------------- TRANSLATE -----------------
+  async function onTranslate() {
+    if (!srcText.trim()) { show({ kind: "err", msg: "Enter text to translate" }); return; }
+    setTrBusy(true);
+    try {
+      if (!hasAnyKey) { setTranslated(Demo.translate(srcText, targetLang)); return; }
+      const prompt = `Translate the following text into ${targetLang} with ${tone} tone. Preserve meaning, names, and formatting. Return only the translation.\n\n---\n${srcText}\n---`;
+      const resp = await callModel(settings, prompt, { expectJSON: false });
+      setTranslated(resp.trim());
+    } catch (e: any) {
+      setTranslated(`Error: ${String(e.message || e)}`);
+    } finally { setTrBusy(false); }
+  }
+
+  // --------------------------------- TESTS --------------------------------
+  function runSelfTests() {
+    const logs: string[] = [];
+    const ok = (name: string) => logs.push(`✅ ${name}`);
+    const fail = (name: string, err: any) => logs.push(`❌ ${name} -> ${String(err?.message || err)}`);
+
+    try { const got = classNames("a", false && "x", "b", null, undefined, "c"); if (got !== "a b c") throw new Error(`expected "a b c", got "${got}"`); ok("classNames merges truthy tokens"); } catch (e) { fail("classNames", e); }
+
+    try { const obj = extractJSONObject("noise {\"x\":1,\"y\":[2,3]} tail"); if (!(obj && obj.x === 1 && Array.isArray(obj.y) && obj.y[1] === 3)) throw new Error("parsed object mismatch"); ok("extractJSONObject extracts first JSON object"); } catch (e) { fail("extractJSONObject ok", e); }
+
+    try { let threw = false; try { extractJSONObject("no json here"); } catch { threw = true; } if (!threw) throw new Error("expected throw when JSON missing"); ok("extractJSONObject throws when no JSON present"); } catch (e) { fail("extractJSONObject fail", e); }
+
+    try { const blob = new Blob(["test"], { type: "text/plain" }); const { a, url } = buildDownloadLink(blob, "test.txt"); if (!a || !url || !/^blob:/.test(url)) throw new Error("invalid link/url"); URL.revokeObjectURL(url); ok("buildDownloadLink produces a blob: URL"); } catch (e) { fail("buildDownloadLink", e); }
+
+    try { const normalized = normalizeProjectData({ name: "X", files: [{ filename: "a.txt", data: "hi" }] }); if (!(normalized.projectName && normalized.files[0].path === "a.txt")) throw new Error("normalize failed"); ok("normalizeProjectData accepts schema drift"); } catch (e) { fail("normalizeProjectData", e); }
+
+    // New tests: object-map files and failure path
+    try { const normalized2 = normalizeProjectData({ projectName: "Y", files: { "b.txt": { text: "hey" }, "dir/c.json": { content: { k: 1 } } } }); if (!(normalized2.files.length === 2 && normalized2.files[0].path)) throw new Error("object-map path extraction failed"); ok("normalizeProjectData handles object map"); } catch (e) { fail("normalizeProjectData object-map", e); }
+
+    try { let threw = false; try { normalizeProjectData({ projectName: "Z" }); } catch { threw = true; } if (!threw) throw new Error("expected throw for missing files"); ok("normalizeProjectData throws on missing files"); } catch (e) { fail("normalizeProjectData throws", e); }
+
+    // readTextHeadTail sampling
+    try {
+      const fake = new File(["A".repeat(10)], "x.txt", { type: "text/plain" });
+      return readTextHeadTail(fake, 4, 4).then((t) => { if (!t) throw new Error("empty"); ok("readTextHeadTail samples content"); setTestsLog([`Tests: ${logs.filter(l=>l.startsWith("✅")).length + 1} passed, ${logs.filter(l=>l.startsWith("❌")).length} failed`, ...logs].join("\n")); });
+    } catch (e) { fail("readTextHeadTail", e); }
+
+    const summary = (() => { const passed = logs.filter(l => l.startsWith("✅")).length; const failed = logs.filter(l => l.startsWith("❌")).length; return `Tests: ${passed} passed, ${failed} failed`; })();
+    setTestsLog([summary, ...logs].join("\n"));
+    show({ kind: logs.some(l => l.startsWith("❌")) ? "err" : "ok", msg: summary });
+  }
+
+  const steps = [
+    { t: "Intent Harmonization" },
+    { t: "Task Decomposition" },
+    { t: "Parallel Execution" },
+    { t: "Synthesis" },
+    { t: "Refinement" },
+  ];
+
+  // ----------------------------------------------------------------------------------
+  // Render
+  // ----------------------------------------------------------------------------------
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#0f0f23] via-[#1a1a3a] to-[#2d1b69] text-white px-4 py-6">
+      {/* Top bar */}
+      <div className="mx-auto max-w-6xl">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-amber-300">Harmonic Project Architect — Universal Builder v3</h1>
+            <div className="text-white/60 text-xs mt-1">Single-file React • API-key switcher • Architect • Analyze • Translate • Demo mode</div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setShowGuide(true)} className="px-3 py-1.5 rounded-lg border border-white/20 hover:border-white/40">Guide</button>
+            <button onClick={() => setShowSettings(true)} className="px-3 py-1.5 rounded-lg bg-cyan-400 text-black font-semibold hover:bg-cyan-300">Settings</button>
+          </div>
+        </div>
+
+        {/* Provider status */}
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <Icon label={settings.provider.toUpperCase()} />
+          {settings.provider === "openai" ? (
+            <span className="text-white/70">model: <b>{settings.openaiModel}</b></span>
+          ) : (
+            <span className="text-white/70">model: <b>{settings.geminiModel}</b></span>
+          )}
+          <span className={classNames("px-2 py-0.5 rounded border", hasAnyKey ? "border-emerald-500/50 text-emerald-300" : "border-white/20 text-white/70")}>{hasAnyKey ? "key: present" : "key: demo mode"}</span>
+          <button onClick={testConnection} className="ml-auto px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20">Test</button>
+          <button onClick={runSelfTests} className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 border border-white/20">Run Self‑Tests</button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-4">
+          {([
+            ["architect", "Architect"],
+            ["analyze", "Analyze"],
+            ["translate", "Translate"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={classNames(
+                "px-3 py-1.5 rounded-lg border",
+                tab === id ? "bg-white text-black border-white" : "bg-transparent border-white/20 text-white/80 hover:border-white/40"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Left: main tool */}
+          <div className="lg:col-span-2 rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4">
+            {tab === "architect" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">1) Architect a multi‑file project</h2>
+                <textarea
+                  value={spec}
+                  onChange={(e) => setSpec(e.target.value)}
+                  rows={10}
+                  placeholder="Describe what to build. Example: A FastAPI service with /ingest endpoint, saves JSON to sqlite, includes tests and a Makefile."
+                  className="w-full rounded-lg bg-black/30 border border-white/10 p-3 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                />
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={onArchitect}
+                    disabled={archBusy || !spec.trim()}
+                    className={classNames("px-3 py-2 rounded-lg font-semibold",
+                      archBusy ? "bg-white/30 text-white cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}
+                  >{archBusy ? "Architecting…" : "Architect & Download"}</button>
+                  <label className="text-xs inline-flex items-center gap-2">
+                    <input type="checkbox" checked={strictSchema} onChange={(e) => setStrictSchema(e.target.checked)} />
+                    Strict schema (require exact keys)
+                  </label>
+                  <span className="text-xs text-white/60">Default is lenient (auto‑normalizes common variations).</span>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+                  {steps.map((s, i) => (
+                    <Step key={i} idx={i + 1} title={s.t} active={archBusy && i === 2} done={!archBusy && i < 4} />
+                  ))}
+                </div>
+
+                <div className="mt-3 h-28 overflow-auto rounded border border-white/10 bg-black/30 p-2 text-xs whitespace-pre-wrap">
+                  {archLog.length === 0 ? <div className="opacity-60">Logs will appear here.</div> : archLog.join("\n")}
+                </div>
+
+                <div className="mt-4 text-xs text-white/60">
+                  Safety: the app asks for complete files (no placeholders) and a valid JSON envelope. In lenient mode we extract/normalize JSON if the model adds prose.
+                </div>
+              </div>
+            )}
+
+            {tab === "analyze" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">2) Analyze files (multi‑select & folders)</h2>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm text-white/70">Add files</label>
+                    <div
+                      ref={dropRef}
+                      className={classNames("rounded-lg border border-dashed p-4 text-xs",
+                        dropActive ? "border-cyan-400 bg-cyan-400/10" : "border-white/20 bg-black/20")}
+                    >Drag & drop files or folders here</div>
+                    <div className="flex gap-2 text-xs flex-wrap">
+                      <label className="px-2 py-1 rounded border border-white/20 bg-white/10 cursor-pointer">Select files
+                        <input type="file" multiple className="hidden" onChange={(e) => addFiles(e.target.files || null)} />
+                      </label>
+                      <label className="px-2 py-1 rounded border border-white/20 bg-white/10 cursor-pointer">Select folder
+                        {/* @ts-ignore */}
+                        <input type="file" webkitdirectory="" directory="" className="hidden" onChange={(e) => addFiles(e.target.files || null)} />
+                      </label>
+                      <button className="px-2 py-1 rounded border border-white/20 bg-white/10" onClick={() => setFiles([])}>Clear</button>
+                      <button className="px-2 py-1 rounded border border-white/20 bg-white/10" onClick={bundleSelected}>Bundle to .zip</button>
+                    </div>
+                    <div className="text-xs text-white/70">Selected: <b>{files.length}</b> files • <b>{formatBytes(totalBytes)}</b></div>
+
+                    <div className="mt-2 text-xs grid grid-cols-2 gap-2">
+                      <div>
+                        <label>Max text files</label>
+                        <input type="number" className="w-full mt-1 bg-black/30 border border-white/10 rounded p-1.5" min={1} max={128} value={cfgMaxTextFiles} onChange={(e) => setCfgMaxTextFiles(Math.max(1, Math.min(128, Number(e.target.value)||16)))} />
+                      </div>
+                      <div>
+                        <label>Max images</label>
+                        <input type="number" className="w-full mt-1 bg-black/30 border border-white/10 rounded p-1.5" min={0} max={64} value={cfgMaxImages} onChange={(e) => setCfgMaxImages(Math.max(0, Math.min(64, Number(e.target.value)||8)))} />
+                      </div>
+                      <div>
+                        <label>Text head (KB)</label>
+                        <input type="number" className="w-full mt-1 bg-black/30 border border-white/10 rounded p-1.5" min={8} max={4096} value={cfgHeadKB} onChange={(e) => setCfgHeadKB(Math.max(8, Math.min(4096, Number(e.target.value)||256)))} />
+                      </div>
+                      <div>
+                        <label>Text tail (KB)</label>
+                        <input type="number" className="w-full mt-1 bg-black/30 border border-white/10 rounded p-1.5" min={0} max={2048} value={cfgTailKB} onChange={(e) => setCfgTailKB(Math.max(0, Math.min(2048, Number(e.target.value)||64)))} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-white/70">Ask a question</label>
+                    <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="e.g. Summarize; where are configs? entrypoints?" className="mt-1 w-full rounded-lg bg-black/30 border border-white/10 p-2.5" />
+                    <button onClick={onAnalyze} disabled={anBusy || files.length === 0} className={classNames("mt-3 px-3 py-2 rounded-lg font-semibold", anBusy ? "bg-white/30 cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}>{anBusy ? "Analyzing…" : "Analyze"}</button>
+
+                    <div className="mt-3 h-40 overflow-auto rounded border border-white/10 bg-black/30 p-2 text-xs">
+                      {files.length === 0 ? (
+                        <div className="opacity-60">No files yet.</div>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-black/40">
+                            <tr>
+                              <th className="text-left">Path</th>
+                              <th className="text-left">Type</th>
+                              <th className="text-right">Size</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {files.slice(0, 200).map((f, i) => (
+                              <tr key={i} className="border-t border-white/10">
+                                <td className="pr-2 truncate max-w-[18rem]">{(f as any).webkitRelativePath || f.name}</td>
+                                <td className="pr-2">{f.type || "(unknown)"}</td>
+                                <td className="text-right">{formatBytes(f.size)}</td>
+                              </tr>
+                            ))}
+                            {files.length > 200 && (
+                              <tr>
+                                <td colSpan={3} className="text-right text-white/60">(+ {files.length - 200} more…)</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <div className="text-sm mb-1 font-semibold">Answer</div>
+                  <textarea readOnly value={analysis} className="w-full min-h-[160px] rounded-lg bg-black/30 border border-white/10 p-2 text-sm" />
+                </div>
+              </div>
+            )}
+
+            {tab === "translate" && (
+              <div>
+                <h2 className="text-lg font-semibold mb-2">3) Translate text</h2>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm text-white/70">Source</label>
+                    <textarea value={srcText} onChange={(e) => setSrcText(e.target.value)} rows={10} className="w-full rounded-lg bg-black/30 border border-white/10 p-3" placeholder="Paste text to translate" />
+                    <div className="mt-2 flex gap-2 items-center text-sm">
+                      <label>Target</label>
+                      <input value={targetLang} onChange={(e) => setTargetLang(e.target.value)} className="w-24 rounded bg-black/30 border border-white/10 p-1.5" placeholder="e.g. es" />
+                      <label>Tone</label>
+                      <select value={tone} onChange={(e) => setTone(e.target.value)} className="rounded bg-black/30 border border-white/10 p-1.5">
+                        <option value="neutral">neutral</option>
+                        <option value="formal">formal</option>
+                        <option value="casual">casual</option>
+                        <option value="technical">technical</option>
+                      </select>
+                      <button onClick={onTranslate} disabled={trBusy || !srcText.trim()} className={classNames("ml-auto px-3 py-2 rounded-lg font-semibold", trBusy ? "bg-white/30 cursor-wait" : "bg-cyan-400 text-black hover:bg-cyan-300")}>{trBusy ? "Translating…" : "Translate"}</button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm text-white/70">Result</label>
+                    <textarea readOnly value={translated} rows={10} className="w-full rounded-lg bg-black/30 border border-white/10 p-3" placeholder="Translation will appear here" />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right: diagnostics */}
+          <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 space-y-4">
+            <div>
+              <div className="text-sm font-semibold mb-1">Self‑Tests</div>
+              <button onClick={runSelfTests} className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 border border-white/20 text-sm">Run</button>
+              <pre className="mt-2 text-xs h-56 overflow-auto rounded border border-white/10 bg-black/30 p-2 whitespace-pre-wrap">{testsLog || "No tests yet."}</pre>
+            </div>
+            <div>
+              <div className="text-sm font-semibold mb-1">Tips</div>
+              <ul className="text-xs text-white/70 list-disc pl-4 space-y-1">
+                <li>Folder upload uses the non‑standard <code>webkitdirectory</code> attribute supported by Chromium browsers.</li>
+                <li>For very large corpora, raise Head/Tail KB and Max Text/Image limits; we stream only samples to the model.</li>
+                <li>If a provider returns extra prose around JSON, we auto‑extract the first JSON object safely.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div
+          className={classNames(
+            "fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-xl border text-sm z-50",
+            toast.kind === "ok"
+              ? "bg-emerald-500 text-black border-emerald-400"
+              : "bg-rose-500 text-white border-rose-400"
+          )}
+        >
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Modals */}
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} value={settings} onSave={persist} />
+      <GuideModal open={showGuide} onClose={() => setShowGuide(false)} />
+    </div>
+  );
+}

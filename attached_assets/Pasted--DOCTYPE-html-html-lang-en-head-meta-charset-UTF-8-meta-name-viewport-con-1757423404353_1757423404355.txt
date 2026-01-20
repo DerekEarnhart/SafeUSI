@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Harmonic Workflow System</title>
+    <!-- Tailwind CSS CDN for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for a futuristic, dark theme */
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3a 50%, #2d1b69 100%);
+            color: #e0e0ff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            background: linear-gradient(45deg, #00ffff, #ff00ff, #ffff00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        }
+        .section-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #00ffff;
+            border-bottom: 2px solid rgba(0, 255, 255, 0.3);
+            padding-bottom: 5px;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease; /* For glow effect */
+        }
+        .card.active-agent {
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+        }
+        textarea, input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e0e0ff;
+            margin-bottom: 10px;
+            resize: vertical;
+        }
+        button {
+            background: linear-gradient(90deg, #00ffff, #ff00ff);
+            color: #ffffff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 255, 255, 0.4);
+            border: none;
+            cursor: pointer;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 255, 255, 0.6);
+        }
+        button:disabled {
+            background: #4a4a6b;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .workflow-step {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+            color: #b0b0e0;
+        }
+        .workflow-step.active {
+            color: #00ffff;
+            font-weight: bold;
+            transform: translateX(5px);
+            transition: transform 0.3s ease;
+        }
+        .workflow-step.completed {
+            color: #00ff00;
+        }
+        .workflow-icon {
+            font-size: 1.5em;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #00ffff;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .coherence-meter {
+            height: 20px;
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .coherence-bar {
+            height: 100%;
+            width: 0%; /* Controlled by JS */
+            background: linear-gradient(90deg, #ff00ff, #00ffff);
+            transition: width 0.5s ease-in-out;
+            border-radius: 10px;
+        }
+        .dissonance-indicator {
+            color: #ff6600;
+            font-weight: bold;
+            margin-top: 10px;
+            text-align: center;
+            opacity: 0; /* Controlled by JS */
+            transition: opacity 0.3s ease-in-out;
+            animation: none; /* Controlled by JS */
+        }
+        .dissonance-indicator.active {
+            opacity: 1;
+            animation: pulse-dissonance 1s infinite alternate;
+        }
+        @keyframes pulse-dissonance {
+            0% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(1.02); opacity: 0.8; }
+        }
+        .kb-update {
+            animation: fade-in 0.5s ease-out;
+        }
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .scrollable-output {
+            max-height: 150px; /* Limit height */
+            overflow-y: auto; /* Enable scrolling */
+            scrollbar-width: thin; /* Firefox */
+            scrollbar-color: #00ffff rgba(0, 0, 0, 0.3); /* Firefox */
+        }
+        /* Webkit scrollbar styles */
+        .scrollable-output::-webkit-scrollbar {
+            width: 8px;
+        }
+        .scrollable-output::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+        }
+        .scrollable-output::-webkit-scrollbar-thumb {
+            background-color: #00ffff;
+            border-radius: 4px;
+            border: 2px solid rgba(0, 0, 0, 0.3);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            h1 {
+                font-size: 2em;
+            }
+            .grid-cols-2 {
+                grid-template-columns: 1fr !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Quantum Harmonic Workflow System</h1>
+
+        <!-- Sovereign AGI: Core Orchestrator Section -->
+        <div class="card">
+            <div class="section-title">Sovereign AGI: Harmonic Core</div>
+            <p class="mb-4 text-sm opacity-80">Input your task or creative brief. The AGI will orchestrate the workflow.</p>
+            <textarea id="taskInput" rows="3" placeholder="e.g., 'Create a marketing campaign for a new product, including visuals and a launch plan.'"></textarea>
+            <button id="startWorkflowBtn">Start Quantum Workflow</button>
+            <button id="refineOutputBtn" class="ml-2 bg-gradient-to-r from-purple-500 to-indigo-500" disabled>Refine Output</button>
+            <div id="agiStatus" class="mt-4 text-center text-lg font-bold"></div>
+        </div>
+
+        <!-- Workflow Visualization -->
+        <div class="card">
+            <div class="section-title">Workflow Harmonization & Progress</div>
+            <div id="workflowSteps" class="mb-4">
+                <div id="step1" class="workflow-step"><span class="workflow-icon">✨</span> Intent Harmonization: Establishing Quantum Intent State</div>
+                <div id="step2" class="workflow-step"><span class="workflow-icon">🔗</span> Task Decomposition & Agent Entanglement: Building Resonant Connections</div>
+                <div id="step3" class="workflow-step"><span class="workflow-icon">⚡</span> Parallelized Execution & State Superposition: Exploring Solution Space</div>
+                <div id="step4" class="workflow-step"><span class="workflow-icon">🌈</span> Coherence Collapse & Output Synthesis: Converging to Optimal Form</div>
+                <div id="step5" class="workflow-step"><span class="workflow-icon">🔄</span> Iterative Refinement & Harmonic Re-equilibration: Enhancing Resonance</div>
+            </div>
+            <div class="coherence-meter">
+                <div id="coherenceBar" class="coherence-bar"></div>
+            </div>
+            <div id="dissonanceIndicator" class="dissonance-indicator">Dissonance Detected! Re-equilibration needed.</div>
+        </div>
+
+        <!-- Internal Agent Modes Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- App Synthesizer Agent -->
+            <div id="appSynthesizerCard" class="card opacity-50 pointer-events-none">
+                <div class="section-title text-cyan-400">App Synthesizer (Opal-inspired)</div>
+                <p class="mb-2 text-sm opacity-80">Generates conceptual app ideas or automated workflows.</p>
+                <input type="text" id="appPrompt" placeholder="Describe a mini-app (e.g., 'AI thumbnail generator')" disabled>
+                <button id="generateAppBtn" disabled>Synthesize App</button>
+                <div id="appOutput" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm whitespace-pre-wrap scrollable-output"></div>
+                <div id="appLoading" class="loading-spinner hidden"></div>
+            </div>
+
+            <!-- Strategic Planner Agent -->
+            <div id="strategicPlannerCard" class="card opacity-50 pointer-events-none">
+                <div class="section-title text-fuchsia-400">Strategic Planner (ChatGPT Agent-inspired)</div>
+                <p class="mb-2 text-sm opacity-80">Develops multi-step plans and problem-solving strategies.</p>
+                <input type="text" id="plannerPrompt" placeholder="Enter a problem (e.g., 'Optimize travel costs for a family of 4')" disabled>
+                <button id="planStrategyBtn" disabled>Plan Strategy</button>
+                <div id="plannerOutput" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm whitespace-pre-wrap scrollable-output"></div>
+                <div id="plannerLoading" class="loading-spinner hidden"></div>
+            </div>
+
+            <!-- Creative Modulator Agent -->
+            <div id="creativeModulatorCard" class="card opacity-50 pointer-events-none">
+                <div class="section-title text-yellow-400">Creative Modulator (Firefly-inspired)</div>
+                <p class="mb-2 text-sm opacity-80">Generates creative assets (text, conceptual visuals).</p>
+                <input type="text" id="creativePrompt" placeholder="Describe a creative asset (e.g., 'futuristic logo for a tech company')" disabled>
+                <button id="modulateCreativeBtn" disabled>Modulate Creative</button>
+                <div id="creativeOutput" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm whitespace-pre-wrap scrollable-output"></div>
+                <div id="creativeLoading" class="loading-spinner hidden"></div>
+            </div>
+
+            <!-- Knowledge Base Display -->
+            <div class="card">
+                <div class="section-title text-white">Knowledge Base (Simulated Quantum State Space)</div>
+                <p class="mb-2 text-sm opacity-80">Dynamic access and learning from simulated knowledge states.</p>
+                <div id="knowledgeBaseDisplay" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm h-32 overflow-y-auto scrollable-output">
+                    <p class="kb-update">Initial knowledge state loaded: Quantum Harmonic Principles, Agent Interaction Models.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Final Output -->
+        <div class="card">
+            <div class="section-title">Final Coherent Output</div>
+            <p class="mb-2 text-sm opacity-80">The synthesized, harmonically aligned solution for your task.</p>
+            <div id="finalOutput" class="mt-4 p-3 bg-gray-800 rounded-lg text-base whitespace-pre-wrap min-h-[100px] scrollable-output">
+                Awaiting workflow completion...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration and Constants ---
+        // API key for Gemini API - leave empty string, Canvas will provide it at runtime
+        const API_KEY = "";
+        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+        const MAX_RETRIES = 3; // Max retries for API calls
+        const RETRY_DELAY_MS = 1000; // Delay between retries in milliseconds
+
+        // --- DOM Elements ---
+        const taskInput = document.getElementById('taskInput');
+        const startWorkflowBtn = document.getElementById('startWorkflowBtn');
+        const refineOutputBtn = document.getElementById('refineOutputBtn');
+        const agiStatus = document.getElementById('agiStatus');
+        const workflowSteps = document.getElementById('workflowSteps').children;
+        const coherenceBar = document.getElementById('coherenceBar');
+        const dissonanceIndicator = document.getElementById('dissonanceIndicator');
+
+        const appSynthesizerCard = document.getElementById('appSynthesizerCard');
+        const appPrompt = document.getElementById('appPrompt');
+        const generateAppBtn = document.getElementById('generateAppBtn');
+        const appOutput = document.getElementById('appOutput');
+        const appLoading = document.getElementById('appLoading');
+
+        const strategicPlannerCard = document.getElementById('strategicPlannerCard');
+        const plannerPrompt = document.getElementById('plannerPrompt');
+        const planStrategyBtn = document.getElementById('planStrategyBtn');
+        const plannerOutput = document.getElementById('plannerOutput');
+        const plannerLoading = document.getElementById('plannerLoading');
+
+        const creativeModulatorCard = document.getElementById('creativeModulatorCard');
+        const creativePrompt = document.getElementById('creativePrompt');
+        const modulateCreativeBtn = document.getElementById('modulateCreativeBtn');
+        const creativeOutput = document.getElementById('creativeOutput');
+        const creativeLoading = document.getElementById('creativeLoading');
+
+        const knowledgeBaseDisplay = document.getElementById('knowledgeBaseDisplay');
+        const finalOutput = document.getElementById('finalOutput');
+
+        // --- State Variables ---
+        let currentCoherence = 0;
+        let workflowActive = false;
+        let agentPromises = []; // To track parallel agent tasks
+        let activeAgents = []; // To track which agents are enabled for a given task
+
+        // --- Utility Functions ---
+
+        /**
+         * Simulates a delay to represent processing time.
+         * @param {number} ms - Milliseconds to delay.
+         */
+        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        /**
+         * Updates the workflow step UI.
+         * @param {number} stepIndex - The 0-based index of the step.
+         * @param {string} status - 'active', 'completed', or '' (for reset).
+         * @param {string} message - Optional message for the status.
+         */
+        const updateWorkflowStepUI = (stepIndex, status, message = '') => {
+            if (workflowSteps[stepIndex]) {
+                Array.from(workflowSteps).forEach((step, idx) => {
+                    step.classList.remove('active', 'completed');
+                    if (idx === stepIndex && status === 'active') {
+                        step.classList.add('active');
+                    } else if (idx < stepIndex || (idx === stepIndex && status === 'completed')) {
+                        step.classList.add('completed');
+                    }
+                });
+                if (message) {
+                    agiStatus.textContent = message;
+                }
+            }
+        };
+
+        /**
+         * Updates the coherence meter and dissonance indicator.
+         * @param {number} value - New coherence value (0-100).
+         * @param {boolean} showDissonance - Whether to show the dissonance indicator.
+         */
+        const updateCoherenceUI = (value, showDissonance = false) => {
+            currentCoherence = Math.max(0, Math.min(100, value)); // Ensure value is between 0 and 100
+            coherenceBar.style.width = `${currentCoherence}%`;
+            dissonanceIndicator.classList.toggle('active', showDissonance);
+        };
+
+        /**
+         * Enables/disables an agent card and its inputs/buttons.
+         * Also adds a visual 'active-agent' class.
+         * @param {HTMLElement} cardElement - The agent card div.
+         * @param {boolean} enable - True to enable, false to disable.
+         */
+        const toggleAgentCard = (cardElement, enable) => {
+            cardElement.classList.toggle('opacity-50', !enable);
+            cardElement.classList.toggle('pointer-events-none', !enable);
+            cardElement.classList.toggle('active-agent', enable); /* Add glow */
+            const inputs = cardElement.querySelectorAll('input, button');
+            inputs.forEach(input => input.disabled = !enable);
+        };
+
+        /**
+         * Adds a message to the knowledge base display.
+         * @param {string} message - The message to add.
+         * @param {string} colorClass - Tailwind color class for the text.
+         */
+        const addKnowledgeBaseUpdate = (message, colorClass = 'text-gray-300') => {
+            const p = document.createElement('p');
+            p.className = `kb-update text-xs mt-2 ${colorClass}`;
+            p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            knowledgeBaseDisplay.appendChild(p);
+            knowledgeBaseDisplay.scrollTop = knowledgeBaseDisplay.scrollHeight; // Scroll to bottom
+        };
+
+        /**
+         * Calls the Gemini API to generate content with retry mechanism.
+         * @param {string} prompt - The prompt for the LLM.
+         * @param {number} retries - Current retry count.
+         * @returns {Promise<string>} - The generated text.
+         */
+        const callGeminiAPI = async (prompt, retries = 0) => {
+            let chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+            const payload = { contents: chatHistory };
+
+            try {
+                const response = await fetch(GEMINI_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                }
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    return result.candidates[0].content.parts[0].text;
+                } else {
+                    throw new Error('Unexpected API response structure or no content.');
+                }
+            } catch (error) {
+                console.error(`Attempt ${retries + 1} failed:`, error);
+                if (retries < MAX_RETRIES) {
+                    await delay(RETRY_DELAY_MS * (retries + 1)); // Exponential backoff
+                    return callGeminiAPI(prompt, retries + 1);
+                } else {
+                    throw new Error(`Failed to connect to generation service after ${MAX_RETRIES} retries: ${error.message}`);
+                }
+            }
+        };
+
+        // --- Agent Mode Functions ---
+
+        /**
+         * Simulates the App Synthesizer agent's operation.
+         * @param {string} prompt - The user's prompt for app synthesis.
+         */
+        const runAppSynthesizer = async (prompt) => {
+            toggleAgentCard(appSynthesizerCard, true); // Keep active during its run
+            appLoading.classList.remove('hidden');
+            appOutput.textContent = 'Synthesizing app idea... (Establishing coherent quantum state for app concept)';
+            try {
+                const generatedContent = await callGeminiAPI(`Generate a conceptual mini-app idea based on this description: "${prompt}". Focus on its purpose, key features, and potential user benefit. Keep it concise, around 50-70 words. Mention 'prime quantum compression' or 'infinite context' if relevant.`);
+                appOutput.textContent = generatedContent;
+                addKnowledgeBaseUpdate(`App concept synthesized: "${prompt.substring(0, 30)}..."`, 'text-cyan-300');
+                updateCoherenceUI(currentCoherence + 15); // Increase coherence
+            } catch (error) {
+                appOutput.textContent = `App Synthesizer Error: ${error.message}`;
+                addKnowledgeBaseUpdate(`App Synthesizer failed: ${error.message}`, 'text-red-400');
+                updateCoherenceUI(currentCoherence - 10, true); // Decrease coherence, show dissonance
+            } finally {
+                appLoading.classList.add('hidden');
+                toggleAgentCard(appSynthesizerCard, false); // Deactivate after run
+            }
+        };
+
+        /**
+         * Simulates the Strategic Planner agent's operation.
+         * @param {string} prompt - The user's prompt for strategic planning.
+         */
+        const runStrategicPlanner = async (prompt) => {
+            toggleAgentCard(strategicPlannerCard, true); // Keep active during its run
+            plannerLoading.classList.remove('hidden');
+            plannerOutput.textContent = 'Planning strategy... (Executing unitary transformation for optimal path)';
+            try {
+                const generatedContent = await callGeminiAPI(`Develop a multi-step strategic plan to address this problem: "${prompt}". Outline the key steps, potential challenges, and expected outcomes. Keep it concise, around 70-100 words. Mention 'harmonic optimization' or 'entangled sub-tasks'.`);
+                plannerOutput.textContent = generatedContent;
+                addKnowledgeBaseUpdate(`Strategic plan generated for: "${prompt.substring(0, 30)}..."`, 'text-fuchsia-300');
+                updateCoherenceUI(currentCoherence + 20); // Increase coherence
+            } catch (error) {
+                plannerOutput.textContent = `Strategic Planner Error: ${error.message}`;
+                addKnowledgeBaseUpdate(`Strategic Planner failed: ${error.message}`, 'text-red-400');
+                updateCoherenceUI(currentCoherence - 15, true); // Decrease coherence, show dissonance
+            } finally {
+                plannerLoading.classList.add('hidden');
+                toggleAgentCard(strategicPlannerCard, false); // Deactivate after run
+            }
+        };
+
+        /**
+         * Simulates the Creative Modulator agent's operation.
+         * @param {string} prompt - The user's prompt for creative generation.
+         */
+        const runCreativeModulator = async (prompt) => {
+            toggleAgentCard(creativeModulatorCard, true); // Keep active during its run
+            creativeLoading.classList.remove('hidden');
+            creativeOutput.textContent = 'Modulating creative output... (Exploring creative quantum fluctuations)';
+            try {
+                const generatedContent = await callGeminiAPI(`Generate a conceptual description for a creative asset based on: "${prompt}". Describe its visual style, mood, and key elements. Keep it concise, around 60-90 words. Reference 'quantum-enhanced' or 'resonant frequencies'.`);
+                creativeOutput.textContent = generatedContent;
+                addKnowledgeBaseUpdate(`Creative asset modulated for: "${prompt.substring(0, 30)}..."`, 'text-yellow-300');
+                updateCoherenceUI(currentCoherence + 10); // Increase coherence
+            } catch (error) {
+                creativeOutput.textContent = `Creative Modulator Error: ${error.message}`;
+                addKnowledgeBaseUpdate(`Creative Modulator failed: ${error.message}`, 'text-red-400');
+                updateCoherenceUI(currentCoherence - 5, true); // Decrease coherence, show dissonance
+            } finally {
+                creativeLoading.classList.add('hidden');
+                toggleAgentCard(creativeModulatorCard, false); // Deactivate after run
+            }
+        };
+
+        /**
+         * Determines which agents to activate based on the task input.
+         * @param {string} task - The user's main task.
+         * @returns {Array<string>} - List of agent IDs to activate.
+         */
+        const determineActiveAgents = (task) => {
+            const lowerTask = task.toLowerCase();
+            const agents = [];
+
+            if (lowerTask.includes('app') || lowerTask.includes('workflow') || lowerTask.includes('automation')) {
+                agents.push('appSynthesizer');
+            }
+            if (lowerTask.includes('plan') || lowerTask.includes('strategy') || lowerTask.includes('optimize') || lowerTask.includes('solution') || lowerTask.includes('problem')) {
+                agents.push('strategicPlanner');
+            }
+            if (lowerTask.includes('visuals') || lowerTask.includes('design') || lowerTask.includes('creative') || lowerTask.includes('content') || lowerTask.includes('media')) {
+                agents.push('creativeModulator');
+            }
+            
+            // If no specific keywords, activate all by default for a general task
+            if (agents.length === 0) {
+                return ['appSynthesizer', 'strategicPlanner', 'creativeModulator'];
+            }
+            return agents;
+        };
+
+        /**
+         * Orchestrates the quantum-harmonic workflow.
+         * @param {boolean} isRefinement - True if this is a refinement run.
+         */
+        const startQuantumWorkflow = async (isRefinement = false) => {
+            if (workflowActive && !isRefinement) return; // Prevent multiple simultaneous workflows unless it's a refinement
+            
+            if (!isRefinement) {
+                resetUI();
+            }
+            workflowActive = true;
+            startWorkflowBtn.disabled = true;
+            refineOutputBtn.disabled = true;
+            taskInput.disabled = true;
+            
+            const userTask = taskInput.value.trim();
+            if (!userTask) {
+                agiStatus.textContent = 'Please enter a task for the AGI.';
+                startWorkflowBtn.disabled = false;
+                taskInput.disabled = false;
+                workflowActive = false;
+                return;
+            }
+
+            if (!isRefinement) {
+                agiStatus.textContent = 'Sovereign AGI: Initiating Workflow...';
+                updateCoherenceUI(10); // Initial coherence
+
+                // Step 1: Intent Harmonization
+                updateWorkflowStepUI(0, 'active', 'Sovereign AGI: Harmonizing Intent (Establishing Quantum Intent State)...');
+                await delay(1500);
+                updateWorkflowStepUI(0, 'completed');
+                updateCoherenceUI(30);
+                addKnowledgeBaseUpdate('Intent Harmonization complete. Quantum Intent State established.', 'text-green-400');
+
+                // Step 2: Task Decomposition & Agent Entanglement
+                updateWorkflowStepUI(1, 'active', 'Sovereign AGI: Decomposing Task & Entangling Agents (Building Resonant Connections)...');
+                await delay(2000);
+                updateWorkflowStepUI(1, 'completed');
+                updateCoherenceUI(50);
+                addKnowledgeBaseUpdate('Task decomposed. Agents entangled, resonant connections established.', 'text-green-400');
+                
+                // Determine and enable relevant agents
+                activeAgents = determineActiveAgents(userTask);
+                if (activeAgents.includes('appSynthesizer')) toggleAgentCard(appSynthesizerCard, true);
+                if (activeAgents.includes('strategicPlanner')) toggleAgentCard(strategicPlannerCard, true);
+                if (activeAgents.includes('creativeModulator')) toggleAgentCard(creativeModulatorCard, true);
+
+                // Populate agent prompts based on the main task input
+                appPrompt.value = `A mini-app related to "${userTask}"`;
+                plannerPrompt.value = `Plan for "${userTask}"`;
+                creativePrompt.value = `Creative assets for "${userTask}"`;
+
+            } else {
+                agiStatus.textContent = 'Sovereign AGI: Initiating Refinement Cycle...';
+                updateCoherenceUI(currentCoherence * 0.8); // Drop coherence slightly for refinement start
+                updateWorkflowStepUI(4, 'active', 'Sovereign AGI: Performing Iterative Refinement (Re-equilibration in progress)...');
+                await delay(1000);
+            }
+
+            // Step 3: Parallelized Execution & State Superposition
+            updateWorkflowStepUI(2, 'active', 'Sovereign AGI: Agents executing in parallel (Exploring Solution Space)...');
+            updateCoherenceUI(currentCoherence + 10);
+
+            // Trigger agent operations for active agents and collect their promises
+            agentPromises = [];
+            if (activeAgents.includes('appSynthesizer')) agentPromises.push(runAppSynthesizer(appPrompt.value));
+            if (activeAgents.includes('strategicPlanner')) agentPromises.push(runStrategicPlanner(plannerPrompt.value));
+            if (activeAgents.includes('creativeModulator')) agentPromises.push(runCreativeModulator(creativePrompt.value));
+
+            // Wait for all agent operations to complete
+            await Promise.allSettled(agentPromises);
+            updateWorkflowStepUI(2, 'completed');
+            agiStatus.textContent = 'Parallel execution complete.';
+            updateCoherenceUI(currentCoherence + 15); // Coherence after execution
+
+            // Step 4: Coherence Collapse & Output Synthesis
+            updateWorkflowStepUI(3, 'active', 'Sovereign AGI: Synthesizing final coherent output (Converging to Optimal Form)...');
+            await delay(2000);
+
+            let synthesizedOutput = `Workflow for: "${userTask}"\n\n`;
+            if (activeAgents.includes('appSynthesizer')) synthesizedOutput += `--- App Synthesizer Output ---\n${appOutput.textContent}\n\n`;
+            if (activeAgents.includes('strategicPlanner')) synthesizedOutput += `--- Strategic Planner Output ---\n${plannerOutput.textContent}\n\n`;
+            if (activeAgents.includes('creativeModulator')) synthesizedOutput += `--- Creative Modulator Output ---\n${creativeOutput.textContent}\n\n`;
+            synthesizedOutput += `Final coherence check: ${currentCoherence}% - System is highly aligned.`;
+
+            finalOutput.textContent = synthesizedOutput;
+            updateWorkflowStepUI(3, 'completed');
+            updateCoherenceUI(90);
+            addKnowledgeBaseUpdate('Final output synthesized. Coherence collapse achieved.', 'text-green-400');
+
+            // Step 5: Iterative Refinement & Harmonic Re-equilibration (Simulated)
+            updateWorkflowStepUI(4, 'active', 'Sovereign AGI: Performing iterative refinement (Enhancing Resonance)...');
+            await delay(1500);
+
+            // Simulate a potential dissonance and re-equilibration
+            const dissonanceChance = isRefinement ? 0.1 : 0.3; // Lower chance of dissonance on refinement
+            if (Math.random() < dissonanceChance) {
+                updateCoherenceUI(currentCoherence - 20, true); // Drop coherence, show dissonance
+                agiStatus.textContent = 'Dissonance detected! Re-equilibration in progress... (Applying Harmonic Algebra)';
+                addKnowledgeBaseUpdate('Dissonance detected! Initiating Harmonic Re-equilibration.', 'text-red-500');
+                await delay(2500);
+                updateCoherenceUI(100, false); // Re-equilibrate to full coherence
+                agiStatus.textContent = 'Re-equilibration complete. System harmonized.';
+                addKnowledgeBaseUpdate('System re-harmonized. Optimal resonance achieved.', 'text-green-400');
+            } else {
+                updateCoherenceUI(100, false); // Full coherence
+                agiStatus.textContent = 'No dissonance. System fully harmonized.';
+                addKnowledgeBaseUpdate('System fully harmonized. Maximal coherence maintained.', 'text-green-400');
+            }
+
+            updateWorkflowStepUI(4, 'completed');
+            agiStatus.textContent = 'Workflow complete. System fully harmonized and task delivered.';
+            startWorkflowBtn.disabled = false;
+            refineOutputBtn.disabled = false; // Enable refine button after initial run
+            taskInput.disabled = false;
+            workflowActive = false;
+        };
+
+        // --- Event Listeners ---
+        startWorkflowBtn.addEventListener('click', () => startQuantumWorkflow(false));
+        refineOutputBtn.addEventListener('click', () => startQuantumWorkflow(true));
+
+        // Optional: Allow manual triggering of individual agents after workflow starts
+        generateAppBtn.addEventListener('click', () => runAppSynthesizer(appPrompt.value));
+        planStrategyBtn.addEventListener('click', () => runStrategicPlanner(plannerPrompt.value));
+        modulateCreativeBtn.addEventListener('click', () => runCreativeModulator(creativePrompt.value));
+
+        // Initial UI setup - call resetUI after all functions are defined and DOM is loaded
+        document.addEventListener('DOMContentLoaded', resetUI);
+
+        // --- Global resetUI function for hoisting ---
+        // This ensures resetUI is available globally and immediately.
+        function resetUI() {
+            agiStatus.textContent = '';
+            updateCoherenceUI(0);
+            Array.from(workflowSteps).forEach(step => step.classList.remove('active', 'completed'));
+            toggleAgentCard(appSynthesizerCard, false);
+            toggleAgentCard(strategicPlannerCard, false);
+            toggleAgentCard(creativeModulatorCard, false);
+            appOutput.textContent = '';
+            plannerOutput.textContent = '';
+            creativeOutput.textContent = '';
+            finalOutput.textContent = 'Awaiting workflow completion...';
+            knowledgeBaseDisplay.innerHTML = `<p class="kb-update">Initial knowledge state loaded: Quantum Harmonic Principles, Agent Interaction Models.</p>`;
+            appPrompt.value = '';
+            plannerPrompt.value = '';
+            creativePrompt.value = '';
+            startWorkflowBtn.disabled = false;
+            refineOutputBtn.disabled = true; // Ensure refine button is disabled initially
+            taskInput.disabled = false;
+            workflowActive = false;
+            agentPromises = [];
+            activeAgents = []; // Reset active agents list
+        }
+    </script>
+</body>
+</html>

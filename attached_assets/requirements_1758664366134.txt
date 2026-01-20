@@ -1,0 +1,7 @@
+flask
+numpy
+networkx
+scipy
+nltk
+spacy
+tensorflow

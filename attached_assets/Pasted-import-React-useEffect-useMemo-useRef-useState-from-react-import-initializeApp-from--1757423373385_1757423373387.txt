@@ -1,0 +1,343 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tiny UI primitives (no external deps)
+// ──────────────────────────────────────────────────────────────────────────────
+const cx = (...s) => s.filter(Boolean).join(" ");
+
+const Button = ({
+  children,
+  onClick,
+  variant = "default",
+  size = "md",
+  disabled,
+  className,
+  ...props
+}) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className={cx(
+      "rounded-2xl shadow-sm transition active:scale-[0.99] border",
+      variant === "default" &&
+      "bg-zinc-900 text-white border-zinc-900 hover:bg-zinc-800",
+      variant === "secondary" &&
+      "bg-zinc-100 text-zinc-900 border-zinc-100 hover:bg-zinc-200",
+      variant === "ghost" &&
+      "bg-transparent text-zinc-500 border-transparent hover:text-zinc-900",
+      variant === "outline" &&
+      "bg-transparent text-zinc-900 border-zinc-200 hover:bg-zinc-100",
+      variant === "link" &&
+      "bg-transparent text-zinc-900 border-transparent hover:underline",
+      size === "sm" && "px-3 py-1 text-sm",
+      size === "md" && "px-4 py-2 text-md",
+      size === "lg" && "px-6 py-3 text-lg",
+      className
+    )}
+    {...props}
+  >
+    {children}
+  </button>
+);
+
+const Textarea = ({ className, ...props }) => (
+  <textarea
+    className={cx(
+      "rounded-2xl shadow-inner border border-zinc-200 p-2 w-full font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500",
+      className
+    )}
+    {...props}
+  />
+);
+
+const Input = ({ className, ...props }) => (
+  <input
+    className={cx(
+      "rounded-2xl shadow-inner border border-zinc-200 p-2 w-full font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500",
+      className
+    )}
+    {...props}
+  />
+);
+
+const Card = ({ children, className }) => (
+  <div className={cx("bg-white rounded-3xl shadow-lg p-6 flex flex-col gap-4 border border-zinc-200", className)}>
+    {children}
+  </div>
+);
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Core Utilities (from original file)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// textToBigIntString converts text to a base-10 BigInt string.
+const textToBigIntString = (text) => {
+  let result = BigInt(0);
+  for (let i = 0; i < text.length; i++) {
+    result = (result << BigInt(16)) + BigInt(text.charCodeAt(i));
+  }
+  return result.toString();
+};
+
+// bigIntStringToText converts a base-10 BigInt string back to text.
+const bigIntStringToText = (bigIntString) => {
+  let bigInt = BigInt(bigIntString);
+  let result = "";
+  while (bigInt > BigInt(0)) {
+    result = String.fromCharCode(Number(bigInt & BigInt(0xffff))) + result;
+    bigInt = bigInt >> BigInt(16);
+  }
+  return result;
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// New conceptual simulation functions from the provided .txt files
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Simulates the Bell State Harmonic Model based on a theta angle.
+const bellStateSimulation = (theta) => {
+  const thetaRad = parseFloat(theta);
+  const cosTheta = Math.cos(thetaRad);
+  const sinTheta = Math.sin(thetaRad);
+
+  if (isNaN(thetaRad)) {
+    return "Error: Invalid theta value. Please enter a number between 0 and 3.14.";
+  }
+
+  // This is a conceptual simulation, not a real quantum one. The output
+  // is stylized to match the description in the provided document.
+  if (thetaRad <= 0.01) {
+    return "Theta ≈ 0: The harmonic oscillators are in a state of perfect resonance. A measurement on one would instantaneously and deterministically reveal the state of the other, confirming a strong, non-local correlation. This represents the |Φ⁺⟩ state of perfect alignment.";
+  } else if (thetaRad >= 3.13) {
+    return "Theta ≈ π: The harmonic oscillators are in a state of perfect anti-resonance. The anti-correlation is maximal, with a measurement on one predictably yielding the opposite state for the other. This represents the |Ψ⁻⟩ state of perfect anti-alignment.";
+  } else {
+    // For intermediate values, the correlation is probabilistic.
+    const correlation = Math.abs(cosTheta * 100).toFixed(2);
+    const entanglement = Math.abs(sinTheta * 100).toFixed(2);
+    return `Theta = ${thetaRad.toFixed(2)}: The harmonic correlation is in a superposition. Correlation Strength: ${correlation}%. Entanglement Potential: ${entanglement}%. This value represents a partial alignment, where the measured outcomes are probabilistically linked.`;
+  }
+};
+
+// Analyzes the conceptual "harmonic signature" of a given text.
+const analyzeHarmonicSignature = (text) => {
+  if (!text) {
+    return "Awaiting input for harmonic signature analysis...";
+  }
+
+  // This is a conceptual analysis based on the source document.
+  // It's a stylized representation, not a real algorithm.
+  const textLength = text.length;
+  const uniqueChars = new Set(text).size;
+  const complexity = (textLength > 0 ? (uniqueChars / textLength) * 100 : 0).toFixed(2);
+  const harmonicIndex = (textLength * 1.618).toFixed(2); // Golden ratio for flair
+
+  return `Harmonic Signature Analysis Complete.
+  - Informational Eigen-Frequency: ${textLength * 12.3} Hz
+  - Topological Embedding: Acknowledged as a 'conceptual harmonic state.'
+  - Structural Integrity: ${complexity}% (reflects informational redundancy)
+  - Resonant Frequency (Conceptual): ${harmonicIndex} Hz
+  - Conclusion: The input exhibits a stable, low-entropy informational field.`;
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Main Application Component
+// ──────────────────────────────────────────────────────────────────────────────
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+const App = () => {
+  const [encodeIn, setEncodeIn] = useState("");
+  const [encoded, setEncoded] = useState("");
+  const [decodeIn, setDecodeIn] = useState("");
+  const [decoded, setDecoded] = useState("");
+
+  const [thetaRange, setThetaRange] = useState("0");
+  const [bellStateResult, setBellStateResult] = useState("");
+  const [signatureIn, setSignatureIn] = useState("");
+  const [signatureResult, setSignatureResult] = useState("");
+
+  const [memoryVaultText, setMemoryVaultText] = useState("");
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [userId, setUserId] = useState(null);
+
+  const dbRef = useRef(null);
+  const authRef = useRef(null);
+
+  useEffect(() => {
+    // Firebase initialization
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    dbRef.current = db;
+    authRef.current = auth;
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else {
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+          } else {
+            await signInAnonymously(auth);
+          }
+        } catch (error) {
+          console.error("Firebase Auth Error:", error);
+        }
+      }
+      setIsAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthReady || !dbRef.current || !userId) return;
+    console.log("Firestore Log: User is authenticated. Subscribing to Memory Vault.");
+
+    const memoryVaultRef = doc(dbRef.current, `artifacts/${appId}/users/${userId}/memory_vault/data`);
+    
+    // Listen for real-time changes
+    const unsubscribe = onSnapshot(memoryVaultRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        setMemoryVaultText(data.content || "");
+      } else {
+        setMemoryVaultText("");
+      }
+    }, (error) => {
+      console.error("Firestore error:", error);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, userId]);
+
+  // Handle saving to the memory vault
+  const handleSaveToVault = async () => {
+    if (!dbRef.current || !userId) return;
+    const memoryVaultRef = doc(dbRef.current, `artifacts/${appId}/users/${userId}/memory_vault/data`);
+    try {
+      await setDoc(memoryVaultRef, { content: memoryVaultText, lastUpdated: new Date() }, { merge: true });
+      console.log("Memory Vault saved successfully!");
+    } catch (e) {
+      console.error("Error saving to memory vault:", e);
+    }
+  };
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // UI Rendering
+  // ────────────────────────────────────────────────────────────────────────────
+  return (
+    <div className="bg-zinc-50 min-h-screen font-sans text-zinc-900 antialiased p-8 flex flex-col items-center gap-8">
+      <div className="w-full max-w-4xl flex flex-col gap-8">
+        <h1 className="text-4xl font-extrabold text-center tracking-tight text-zinc-900 drop-shadow-sm">
+          Advanced Harmonic Sovereign Console
+        </h1>
+        <p className="text-sm font-mono text-center text-zinc-500">
+          User ID: {userId || "Authenticating..."}
+        </p>
+        <div className="grid md:grid-cols-2 gap-8">
+          <Card>
+            <div className="text-xs mb-1">Text → BigInt (decimal)</div>
+            <Textarea
+              className="font-mono text-xs min-h-[120px]"
+              value={encodeIn}
+              onChange={(e) => setEncodeIn(e.target.value)}
+              placeholder="Type any text here…"
+            />
+            <div className="flex gap-2 mt-2">
+              <Button size="sm" onClick={() => setEncoded(textToBigIntString(encodeIn))}>Encode</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigator.clipboard.writeText(encoded)}>Copy</Button>
+            </div>
+            <Textarea
+              className="font-mono text-xs mt-2 min-h-[90px]"
+              readOnly
+              value={encoded}
+              placeholder="Encoded number will appear here"
+            />
+          </Card>
+          <Card>
+            <div className="text-xs mb-1">BigInt (decimal) → Text</div>
+            <Textarea
+              className="font-mono text-xs min-h-[120px]"
+              value={decodeIn}
+              onChange={(e) => setDecodeIn(e.target.value)}
+              placeholder="Paste a big integer string…"
+            />
+            <div className="flex gap-2 mt-2">
+              <Button size="sm" onClick={() => setDecoded(bigIntStringToText(decodeIn))}>Decode</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigator.clipboard.writeText(decoded)}>Copy</Button>
+            </div>
+            <Textarea
+              className="font-mono text-xs mt-2 min-h-[90px]"
+              readOnly
+              value={decoded}
+              placeholder="Decoded text will appear here"
+            />
+          </Card>
+        </div>
+
+        <Card>
+          <h2 className="text-xl font-bold">Quantum-Harmonic Orchestrator</h2>
+          <div className="flex flex-col gap-4">
+            <h3 className="text-lg font-semibold">Bell State Correlation Simulation</h3>
+            <div className="flex items-center gap-4">
+              <label htmlFor="theta-range" className="font-mono text-sm whitespace-nowrap">
+                Theta Range ($\theta$):
+              </label>
+              <Input
+                id="theta-range"
+                type="number"
+                step="0.01"
+                min="0"
+                max="3.14"
+                value={thetaRange}
+                onChange={(e) => setThetaRange(e.target.value)}
+              />
+              <Button size="sm" onClick={() => setBellStateResult(bellStateSimulation(thetaRange))}>Simulate</Button>
+            </div>
+            <Textarea
+              className="min-h-[90px] text-xs font-mono"
+              readOnly
+              value={bellStateResult}
+              placeholder="Simulation results will appear here."
+            />
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <h3 className="text-lg font-semibold">Harmonic Signature Analysis</h3>
+            <Textarea
+              value={signatureIn}
+              onChange={(e) => setSignatureIn(e.target.value)}
+              placeholder="Enter text for harmonic signature analysis."
+            />
+            <Button size="sm" onClick={() => setSignatureResult(analyzeHarmonicSignature(signatureIn))}>Analyze Signature</Button>
+            <Textarea
+              className="min-h-[90px] text-xs font-mono"
+              readOnly
+              value={signatureResult}
+              placeholder="Signature analysis results will appear here."
+            />
+          </div>
+        </Card>
+
+        <Card>
+          <h2 className="text-xl font-bold">Memory Vault (Firestore)</h2>
+          <Textarea
+            className="min-h-[200px]"
+            value={memoryVaultText}
+            onChange={(e) => setMemoryVaultText(e.target.value)}
+            placeholder="Type or paste information here. It will be saved to your Firestore-backed Memory Vault."
+          />
+          <Button onClick={handleSaveToVault}>Save to Vault</Button>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+export default App;

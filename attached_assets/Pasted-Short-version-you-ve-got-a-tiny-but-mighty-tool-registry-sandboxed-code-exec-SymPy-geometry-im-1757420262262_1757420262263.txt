@@ -1,0 +1,330 @@
+Short version: you’ve got a tiny-but-mighty tool registry (sandboxed code exec + SymPy geometry + image stub) and a fat pile of “Harmonic” scaffolding. You can turn that into a real, shippable Creator Studio in a weekend: one Python package, one REST server, four plug-in tools (Geo-Art, Story Builder, VFX Loops, Music Seeds), plus a built-in “guide” tool so people aren’t lost.
+
+Below is the “do this now” plan with drop-in code to wire it all up cleanly.
+
+⸻
+
+What you can do with these (concrete, shippable)
+	1.	Ship a microservice that runs tools from your registry.
+Expose POST /run → {tool:"geo_art", args:{...}} returns {result:...}. Run in your sandbox with strict AST checks + timeouts.
+	2.	Bundle 4 creator tools out of the box (plug-ins you can enable/disable):
+
+	•	Geo-Art: math → art. Uses SymPy’s geometric facts as the seed for procedurally rendered PNGs (TikTok bait).
+	•	Story Builder: safe user code → branching micro-stories; auto-sprinkle a mini math fact from the prover.
+	•	VFX Sim: generate JSON “frame” payloads you can pipe into a web preview (slow-TV loops, album visuals).
+	•	Music Seeds: synth base64 WAV bytes or MIDI skeletons (phi-modulated sine stacks) that people remix.
+
+	3.	Add an in-app guide (a tool that reads the registry and explains “what can I do?”). That solves your “it needs a guide” pain.
+	4.	Monetize with packs: premium presets (themes, palettes, story arcs), batch rendering, and an API key for automation.
+	5.	Fold your Code Resonance Lab in as a fifth tool (“sequence_analyzer”) so you can analyze text/DNA/SKU patterns on demand.
+
+⸻
+
+Wire it up (minimal skeleton you can paste)
+
+0) Tool model + registry loader
+
+# registry.py
+from dataclasses import dataclass
+from typing import Callable, Dict, Any, Optional
+
+@dataclass
+class Tool:
+    name: str
+    version: str
+    schema: Dict[str, Any]  # JSON-schema-ish, informal is fine
+    runner: Callable[[Dict[str, Any]], Dict[str, Any]]
+    doc: Optional[str] = None
+
+TOOLS: Dict[str, Tool] = {}
+
+def register(tool: Tool):
+    TOOLS[tool.name] = tool
+
+def run_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    if name not in TOOLS:
+        raise ValueError(f"Unknown tool: {name}")
+    return TOOLS[name].runner(args)
+
+def list_tools() -> Dict[str, Any]:
+    return {
+        k: {"version": v.version, "schema": v.schema, "doc": v.doc}
+        for k, v in TOOLS.items()
+    }
+
+1) Geo-Art (fixes your missing imports & headless render)
+
+# geo_art_runner.py
+import io, base64
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
+
+from geometric_prover import prove_midpoint  # your SymPy thing
+
+def geo_art_runner(args: dict) -> dict:
+    theorem = prove_midpoint()
+    title = args.get("title") or f"Midpoint symmetry — {theorem}"
+    # harmonic-ish Lissajous variant (pretty and safe)
+    N = int(args.get("samples", 2000))
+    a = float(args.get("a", 1.0))
+    b = float(args.get("b", 2.0))
+    t = np.linspace(0, 2*np.pi, N)
+    x = np.cos(a*t)
+    y = np.sin(b*t)
+    plt.figure(figsize=(4,4), dpi=160)
+    plt.plot(x, y, linewidth=1.2)
+    plt.axis("off")
+    plt.title(title, fontsize=9)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+    plt.close()
+    buf.seek(0)
+    img_data = base64.b64encode(buf.read()).decode()
+    return {"image": f"data:image/png;base64,{img_data}", "theorem": str(theorem)}
+
+Register it:
+
+# in registry_bootstrap.py (or __init__.py of package)
+from registry import register, Tool
+from geo_art_runner import geo_art_runner
+
+register(Tool(
+    name="geo_art",
+    version="0.1",
+    schema={"type":"object","properties":{
+        "title":{"type":"string"},
+        "samples":{"type":"integer","minimum":256,"maximum":10000},
+        "a":{"type":"number"}, "b":{"type":"number"}
+    }},
+    runner=geo_art_runner,
+    doc="Generate symmetric math art seeded by a geometric theorem."
+))
+
+2) Story Builder (safe sandbox call, math garnish)
+
+# story_builder.py
+from sandbox_runner import run_user_code
+from geometric_prover import prove_midpoint
+
+DEFAULT_CODE = 'print(f"Once upon a time, a {inputs.get(\'hero\', \'traveler\')} met a paradox.")'
+
+def story_builder_runner(args: dict) -> dict:
+    code = args.get("code", DEFAULT_CODE)
+    inputs = args.get("inputs", {"hero": "mathematician", "twist": "harmonic resonance"})
+    result = run_user_code(code, inputs=inputs)  # stdout, globals
+    theorem = str(prove_midpoint())
+    story = (result.get("stdout") or "").strip() + f"\n\nMath cameo: {theorem}"
+    return {"story": story, "globals": result.get("globals", {})}
+
+Register:
+
+register(Tool(
+    name="story_builder",
+    version="0.1",
+    schema={"type":"object","properties":{
+        "code":{"type":"string"},
+        "inputs":{"type":"object"}
+    }},
+    runner=story_builder_runner,
+    doc="Run safe Python storylets with inputs; auto-add a tiny math fact."
+))
+
+3) VFX Loops (JSON “frames” payload you can preview on web)
+
+# vfx_sim_runner.py
+import json, base64
+import numpy as np
+
+def vfx_sim_runner(args: dict) -> dict:
+    # small sinefield; client can map to colors/particles
+    frames = int(args.get("frames", 30))
+    N = int(args.get("samples_per_frame", 128))
+    freq = float(args.get("freq", 2.0))
+    payload = []
+    t_all = np.linspace(0, 2*np.pi, N)
+    for f in range(frames):
+        phase = 2*np.pi * f/frames
+        y = np.sin(freq*t_all + phase).tolist()
+        payload.append(y)
+    blob = base64.b64encode(json.dumps(payload).encode()).decode()
+    return {"frames_b64json": blob, "shape": [frames, N]}
+
+Register:
+
+register(Tool(
+    name="vfx_sim",
+    version="0.1",
+    schema={"type":"object","properties":{
+        "frames":{"type":"integer","minimum":4,"maximum":600},
+        "samples_per_frame":{"type":"integer","minimum":32,"maximum":2048},
+        "freq":{"type":"number"}
+    }},
+    runner=vfx_sim_runner,
+    doc="Generate procedural wave frames (JSON) for simple VFX loops."
+))
+
+4) Music Seeds (base64 WAV you can play in-browser)
+
+# music_composer.py
+import io, base64, struct, math
+
+def _sine_wav(seconds=2.0, sr=44100, freqs=(220.0, 352.0)):
+    N = int(sr*seconds)
+    buf = io.BytesIO()
+    # naive WAV header writer (mono, 16-bit)
+    def write(fmt, *vals): buf.write(struct.pack(fmt, *vals))
+    data = bytearray()
+    for n in range(N):
+        t = n/sr
+        s = sum(math.sin(2*math.pi*f*t) for f in freqs)/len(freqs)
+        amp = int(max(-1.0, min(1.0, s))*32767)
+        data += struct.pack("<h", amp)
+    # WAV RIFF
+    write("<4sI4s", b"RIFF", 36+len(data), b"WAVE")
+    write("<4sI", b"fmt ", 16)
+    write("<HHIIHH", 1, 1, sr, sr*2, 2, 16)
+    write("<4sI", b"data", len(data))
+    buf.write(data)
+    return buf.getvalue()
+
+def music_composer_runner(args: dict) -> dict:
+    seconds = float(args.get("seconds", 2.5))
+    base = float(args.get("base_hz", 220.0))
+    phi = (1 + 5**0.5)/2
+    freqs = (base, base*phi/1.5, base*2)
+    wav = _sine_wav(seconds=seconds, freqs=freqs)
+    b64 = base64.b64encode(wav).decode()
+    return {"wav_base64": f"data:audio/wav;base64,{b64}", "freqs": freqs}
+
+Register:
+
+register(Tool(
+    name="music_composer",
+    version="0.1",
+    schema={"type":"object","properties":{
+        "seconds":{"type":"number","minimum":0.2,"maximum":12.0},
+        "base_hz":{"type":"number","minimum":55,"maximum":880}
+    }},
+    runner=music_composer_runner,
+    doc="Generate short phi-flavored sine pads (WAV base64)."
+))
+
+5) Guide tool (your “in-app help”)
+
+# guide_tool.py
+from registry import list_tools
+
+def guide_runner(_: dict) -> dict:
+    return {"tools": list_tools(),
+            "how_to": [
+              "Call POST /run with {'tool':'geo_art','args':{...}} to get a PNG data URL.",
+              "Use story_builder for sandboxed storylets; pass {'inputs':{...}}.",
+              "vfx_sim returns base64 JSON frames; animate in your web canvas.",
+              "music_composer returns a data:audio/wav;base64 URL you can <audio> src."
+            ]}
+
+Register:
+
+register(Tool(
+    name="guide",
+    version="0.1",
+    schema={"type":"object","properties":{}},
+    runner=guide_runner,
+    doc="Lists tools and quickstart hints."
+))
+
+6) Minimal REST server
+
+# api.py
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from registry import run_tool, list_tools
+import registry_bootstrap  # ensures tools get registered
+
+app = FastAPI(title="Harmonic Tool Forge")
+
+class RunReq(BaseModel):
+    tool: str
+    args: dict = {}
+
+@app.get("/tools")
+def tools():
+    return list_tools()
+
+@app.post("/run")
+def run(req: RunReq):
+    try:
+        res = run_tool(req.tool, req.args or {})
+        return {"ok": True, "result": res}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+Run it:
+
+uvicorn api:app --reload --port 5055
+
+Example curl
+
+curl -X POST localhost:5055/run \
+  -H 'content-type: application/json' \
+  -d '{"tool":"geo_art","args":{"a":1,"b":2,"samples":1800}}' > out.json
+
+
+⸻
+
+Safety + sandbox knobs (keep it boring, keep it safe)
+	•	AST allow-list only (no import unless from a curated set, no exec, no open, no __*__).
+	•	Resource limits per run: time (e.g., 1.5s), memory (e.g., 128MB), file-system disabled, network disabled.
+	•	Matplotlib headless (Agg) and small canvases (e.g., 1024×1024 max).
+	•	Numpy only, no C-extensions beyond what you trust.
+	•	Logging every run with UUID, tool name, arg hash; redact long blobs.
+
+⸻
+
+Make it real for users (quick wins)
+	•	Web demo page with 4 tabs (Art, Story, VFX, Music), each calling your POST /run. Drag a slider → instant preview.
+	•	Preset packs: “Calabi-Yau palette,” “Pentatonic pads,” “Celtic braid curves,” “Sci-noir story seeds.” Sell as JSON.
+	•	Batch mode: Take a CSV of prompts, render 100 clips for a TikTok/Reels pack.
+	•	Analytics: Count runs per tool, avg latency, top params; expose /health and /metrics.
+
+⸻
+
+Optional: fold Code Resonance Lab in as a tool
+
+Wrap your analyzer’s main function as sequence_analyzer:
+
+# sequence_tool.py
+from resonance_lab_v1_1 import analyze_codes
+
+def sequence_analyzer_runner(args: dict) -> dict:
+    codes = args.get("codes", [])
+    prime = bool(args.get("prime", False))
+    rep = analyze_codes(codes, custom_map=args.get("map"), prime_overlay=prime, bins=int(args.get("bins", 16)))
+    return rep
+
+Register it with:
+
+register(Tool(
+    name="sequence_analyzer",
+    version="1.1",
+    schema={"type":"object","properties":{
+        "codes":{"type":"array","items":{"type":"string"}},
+        "prime":{"type":"boolean"},
+        "bins":{"type":"integer","minimum":2,"maximum":64}
+    }},
+    runner=sequence_analyzer_runner,
+    doc="Spectral + info-theoretic analyzer for arbitrary symbol sequences."
+))
+
+
+⸻
+
+Launch checklist (fast)
+	•	Package: pip install -e . with pyproject.toml.
+	•	Run: uvicorn api:app and hit /tools to see your guide.
+	•	Ship a one-page demo (HTML+JS) that calls the API and previews outputs.
+	•	Record 3 short demos (art timelapse, story branch, vfx loop) and post as a thread explaining the “Harmonic Tool Forge”.
+
+This keeps your sovereign vibe while delivering something concrete people can click, remix, and share. Next step: add job queue + export (mp4, zip) and experiment scoring so your “auto-improver” can tune presets over time.

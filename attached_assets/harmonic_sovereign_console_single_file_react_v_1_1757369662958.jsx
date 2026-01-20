@@ -1,0 +1,652 @@
+import React, { useMemo, useRef, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import {
+  Brain,
+  HardDrive,
+  Activity,
+  Play,
+  RefreshCcw,
+  Download,
+  Upload,
+  FileCode2,
+  Wand2,
+  AlertTriangle,
+  BookOpen,
+  Shield,
+  Lock,
+  Gauge,
+  ClipboardCopy,
+} from "lucide-react";
+
+/**
+ * Harmonic Sovereign Console — Single‑File React (v1)
+ * ---------------------------------------------------------------------------
+ * A compact, production‑ready UI that merges three things Derek asked for:
+ *  1) A live Memory Vault inspector with belief priors and audit trail
+ *  2) A Quantum‑Harmonic Workflow Orchestrator (agents + coherence meter)
+ *  3) A tiny prime-ish text <-> big‑int encoder for number‑only message pipes
+ *
+ * No external APIs. Everything runs fully in‑browser (Canvas friendly).
+ * Uses shadcn/ui + lucide-react. Tailwind classes for layout/visual polish.
+ */
+
+// ---- Seed Memory Vault (from your message) ---------------------------------
+const seedVault = {
+  audit_trail: [
+    {
+      timestamp: 1757104442176,
+      action: "file_received_and_processed",
+      details: {
+        fileName: "const",
+        fileSize: 0,
+        fileType: "application/octet-stream",
+        ingestion:
+          "Perception System analyzed the incoming data stream, identifying its multi-modal harmonic signature.",
+        compression:
+          "Quantum-Hybrid Processing Unit applied advanced harmonic compression algorithms, efficient & lossless embedding.",
+        large_io_handling: "File size within standard processing parameters.",
+        media_viewing: "Not visual media; no visual processing required.",
+        memory_integration:
+          "Transformed data integrated into Persistent Harmonic Ledger; non-degrading, non-fading permanence.",
+      },
+    },
+  ],
+  supported_file_types: "all_known_formats_via_harmonic_embedding",
+  memory_attributes: {
+    degradation: "none",
+    permanence: "harmonic_stable",
+    fading: "none",
+  },
+  belief_state: { A: 1, B: 1, C: 1 },
+  large_io_capability: "harmonic_compression_and_distributed_processing_framework",
+  code_knowledge: {},
+  programming_skills: {},
+};
+
+// ---- Helpers ---------------------------------------------------------------
+function ts(ms: number) {
+  try {
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return String(ms);
+    return d.toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
+// Pseudo-random but deterministic given a string (for agent text variation)
+function seedRand(seed: string) {
+  let h = 1779033703 ^ seed.length;
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return () => {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    const t = (h ^= h >>> 16) >>> 0;
+    return t / 4294967296;
+  };
+}
+
+// Simple encoding: text -> hex -> BigInt string (not compression; just packing)
+function textToBigIntString(s: string) {
+  const enc = new TextEncoder().encode(s);
+  let hex = "";
+  for (const b of enc) hex += b.toString(16).padStart(2, "0");
+  const big = BigInt("0x" + (hex || "00"));
+  return big.toString(10);
+}
+
+function bigIntStringToText(n: string) {
+  let big = BigInt(n || "0");
+  let hex = big.toString(16);
+  if (hex.length % 2) hex = "0" + hex;
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+// Tiny utility to download a string as a file
+function download(name: string, content: string) {
+  const blob = new Blob([content], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Speech synthesis (if supported)
+function speak(text: string) {
+  if (typeof window === "undefined") return;
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  window.speechSynthesis.speak(u);
+}
+
+// ---- Subcomponents ---------------------------------------------------------
+const Pill: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <span className="text-xs rounded-full border px-2 py-0.5 bg-muted/40">
+    {children}
+  </span>
+);
+
+// ---- Main App --------------------------------------------------------------
+export default function App() {
+  // Memory Vault state
+  const [vault, setVault] = useState(structuredClone(seedVault));
+  const [vaultJson, setVaultJson] = useState(JSON.stringify(seedVault, null, 2));
+  const [vaultOk, setVaultOk] = useState(true);
+
+  // Belief state sliders
+  const [alphaA, setAlphaA] = useState<number>(vault.belief_state.A);
+  const [alphaB, setAlphaB] = useState<number>(vault.belief_state.B);
+  const [alphaC, setAlphaC] = useState<number>(vault.belief_state.C);
+  const alphaSum = alphaA + alphaB + alphaC;
+  const probs = {
+    A: alphaA / alphaSum,
+    B: alphaB / alphaSum,
+    C: alphaC / alphaSum,
+  };
+
+  // Knowledge base (simple log)
+  const [kb, setKb] = useState<string[]>([
+    "Initial knowledge state loaded: Quantum Harmonic Principles, Agent Interaction Models.",
+  ]);
+
+  // Workflow
+  const [task, setTask] = useState("");
+  const [coherence, setCoherence] = useState(0);
+  const [dissonance, setDissonance] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [finalOut, setFinalOut] = useState("Awaiting workflow completion...");
+
+  // Agents
+  const [appOut, setAppOut] = useState("");
+  const [planOut, setPlanOut] = useState("");
+  const [creaOut, setCreaOut] = useState("");
+
+  // Encoder/Decoder
+  const [encodeIn, setEncodeIn] = useState("");
+  const [encoded, setEncoded] = useState("");
+  const [decodeIn, setDecodeIn] = useState("");
+  const [decoded, setDecoded] = useState("");
+
+  const coherenceBar = useMemo(() => Math.max(0, Math.min(100, coherence)), [coherence]);
+
+  function addKB(msg: string) {
+    setKb((k) => [...k, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  }
+
+  function saveBeliefToVault() {
+    const next = structuredClone(vault);
+    next.belief_state = { A: alphaA, B: alphaB, C: alphaC } as any;
+    setVault(next);
+    setVaultJson(JSON.stringify(next, null, 2));
+    addKB("Belief priors updated and committed to Memory Vault.");
+  }
+
+  function importVaultFromJson() {
+    try {
+      const parsed = JSON.parse(vaultJson);
+      setVault(parsed);
+      // sync sliders if belief_state present
+      if (parsed?.belief_state) {
+        setAlphaA(Number(parsed.belief_state.A) || 1);
+        setAlphaB(Number(parsed.belief_state.B) || 1);
+        setAlphaC(Number(parsed.belief_state.C) || 1);
+      }
+      setVaultOk(true);
+      addKB("Imported Memory Vault JSON.");
+    } catch (e: any) {
+      setVaultOk(false);
+    }
+  }
+
+  function exportVault() {
+    download("memory_vault.json", JSON.stringify(vault, null, 2));
+  }
+
+  async function ingestFile(f: File) {
+    const details = {
+      fileName: f.name,
+      fileSize: f.size,
+      fileType: f.type || "application/octet-stream",
+      ingestion: "Perception analyzed metadata & signature.",
+      compression: "Harmonic embedding applied (toy).",
+      large_io_handling: f.size > 5_000_000 ? "Routed via distributed pipeline." : "Standard path.",
+      media_viewing: /^image\//.test(f.type)
+        ? "Image-type: (viewer available if needed)."
+        : "Not visual media; no visual processing required.",
+      memory_integration: "Embedded into Persistent Harmonic Ledger (simulated).",
+    };
+    const next = structuredClone(vault);
+    next.audit_trail.unshift({ timestamp: Date.now(), action: "file_received_and_processed", details });
+    setVault(next);
+    setVaultJson(JSON.stringify(next, null, 2));
+    addKB(`Ingested file: ${f.name} (${f.size} bytes).`);
+  }
+
+  // ---- Agents (local, deterministic text synthesis) ------------------------
+  async function runOrchestrator(refine = false) {
+    if (busy) return;
+    setBusy(true);
+    setDissonance(false);
+    setFinalOut(refine ? "Refinement cycle initiated..." : "Orchestrating...");
+
+    const t = task.trim();
+    if (!t) {
+      setFinalOut("Please enter a task for the AGI.");
+      setBusy(false);
+      return;
+    }
+
+    addKB(refine ? "Refinement pass: re‑equilibrating state." : "Harmonizing intent.");
+    setCoherence(refine ? Math.max(10, coherence * 0.8) : 10);
+    await sleep(500);
+
+    // Step 1: Harmonize
+    setCoherence((c) => c + 20);
+    await sleep(500);
+    addKB("Task decomposed; agents entangled.");
+
+    // Step 2: Parallel agents
+    setCoherence((c) => c + 20);
+    const [a, p, cTxt] = await Promise.all([
+      synthApp(t),
+      synthPlan(t),
+      synthCreative(t),
+    ]);
+    setAppOut(a);
+    setPlanOut(p);
+    setCreaOut(cTxt);
+
+    addKB("Parallel execution complete.");
+    setCoherence((c) => Math.min(85, c + 15));
+    await sleep(600);
+
+    // Step 3: Synthesize
+    const out = `Workflow for: "${t}"
+\n--- App Synthesizer ---\n${a}\n\n--- Strategic Planner ---\n${p}\n\n--- Creative Modulator ---\n${cTxt}\n\nFinal coherence check: ${Math.round(coherenceBar)}%`;
+    setFinalOut(out);
+    addKB("Coherence collapse achieved. Output synthesized.");
+    setCoherence(95);
+
+    // Step 4: Optional dissonance + re‑equilibration
+    const noisy = Math.random() < (refine ? 0.1 : 0.25);
+    if (noisy) {
+      setDissonance(true);
+      setCoherence((c) => Math.max(40, c - 20));
+      addKB("Dissonance detected! Initiating harmonic re‑equilibration...");
+      await sleep(1200);
+      setDissonance(false);
+      setCoherence(100);
+      addKB("Re‑harmonized. Optimal resonance achieved.");
+    } else {
+      setCoherence(100);
+      addKB("System fully harmonized.");
+    }
+
+    setBusy(false);
+  }
+
+  async function synthApp(t: string) {
+    const rng = seedRand("app:" + t);
+    const hooks = [
+      "prime‑quantum compression",
+      "infinite context surfaces",
+      "safety‑preserving operator",
+      "self‑auditing traces",
+      "harmonic scheduler",
+    ];
+    const pick = hooks[Math.floor(rng() * hooks.length)];
+    return `A minimal orchestrator that turns \"${t}\" into a deployable mini‑app. Features ${pick}, typed IO ports, and offline‑first state. Ships with JSON export + CLI shim.`;
+  }
+
+  async function synthPlan(t: string) {
+    const steps = [
+      "Define intent → constraints → success metrics",
+      "Decompose into agents; assign capabilities",
+      "Run parallel search; collect artifacts",
+      "Score with coherence + cost; downselect",
+      "Assemble final; generate tests + README",
+    ];
+    return steps.map((s, i) => `${i + 1}. ${s} (for \"${t}\")`).join("\n");
+  }
+
+  async function synthCreative(t: string) {
+    const rng = seedRand("crea:" + t);
+    const vibes = ["neon on slate", "matte indigo", "graphite + cyan", "midnight gradient"];
+    const motifs = ["concentric waves", "lattice lines", "phosphor dots", "isometric orbits"];
+    const v = vibes[Math.floor(rng() * vibes.length)];
+    const m = motifs[Math.floor(rng() * motifs.length)];
+    return `Art direction: ${v}. Motif: ${m}. Tone: confident, lucid, technical‑poetic. Use rounded‑2xl cards, soft shadows, and subtle motion for a sense of living coherence.`;
+  }
+
+  function sleep(ms: number) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // ---- UI ------------------------------------------------------------------
+  return (
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 p-4 md:p-6 grid gap-4 md:gap-6 grid-cols-1 xl:grid-cols-[1.1fr_1.2fr]">
+      {/* LEFT: Memory Vault */}
+      <div className="space-y-4">
+        <Card className="border-slate-800/60">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5" />
+              <CardTitle>Memory Vault</CardTitle>
+              <Badge variant="secondary" className="ml-auto">harmonic_stable</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <Pill>{vault.supported_file_types}</Pill>
+              <Pill>degradation: {vault.memory_attributes.degradation}</Pill>
+              <Pill>fading: {vault.memory_attributes.fading}</Pill>
+              <Pill>IO: {vault.large_io_capability}</Pill>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <div className="text-sm mb-1 font-medium">Belief priors (Dirichlet α)</div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <div className="mb-1">A: {alphaA}</div>
+                    <Input type="range" min={1} max={20} value={alphaA} onChange={(e) => setAlphaA(Number(e.target.value))} />
+                  </div>
+                  <div>
+                    <div className="mb-1">B: {alphaB}</div>
+                    <Input type="range" min={1} max={20} value={alphaB} onChange={(e) => setAlphaB(Number(e.target.value))} />
+                  </div>
+                  <div>
+                    <div className="mb-1">C: {alphaC}</div>
+                    <Input type="range" min={1} max={20} value={alphaC} onChange={(e) => setAlphaC(Number(e.target.value))} />
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-slate-400">
+                  Probabilities ≈ {probs.A.toFixed(2)} / {probs.B.toFixed(2)} / {probs.C.toFixed(2)}
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" onClick={saveBeliefToVault}>
+                    <Shield className="mr-2 h-4 w-4" /> Commit
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <div className="text-sm mb-1 font-medium">State export / import</div>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" onClick={exportVault}>
+                    <Download className="mr-2 h-4 w-4" /> Export JSON
+                  </Button>
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <Upload className="h-4 w-4" />
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept="application/json"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        const txt = await f.text();
+                        setVaultJson(txt);
+                      }}
+                    />
+                    Load JSON
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <Tabs defaultValue="audit" className="w-full mt-2">
+              <TabsList className="grid grid-cols-3 bg-slate-900/50">
+                <TabsTrigger value="audit">Audit Trail</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+                <TabsTrigger value="ingest">Ingest</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="audit" className="mt-3">
+                <div className="max-h-56 overflow-auto rounded border border-slate-800/60">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-900/60 text-slate-300 sticky top-0">
+                      <tr>
+                        <th className="text-left p-2 w-[36%]">When</th>
+                        <th className="text-left p-2 w-[30%]">Action</th>
+                        <th className="text-left p-2">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vault.audit_trail.map((row: any, i: number) => (
+                        <tr key={i} className="border-t border-slate-800/60">
+                          <td className="p-2 align-top">{ts(row.timestamp)}</td>
+                          <td className="p-2 align-top">{row.action}</td>
+                          <td className="p-2 align-top text-slate-300">
+                            <div className="flex flex-wrap gap-2 mb-1">
+                              <Pill>{row.details.fileName}</Pill>
+                              <Pill>{row.details.fileType}</Pill>
+                              <Pill>{row.details.fileSize} bytes</Pill>
+                            </div>
+                            <div className="opacity-80">{row.details.memory_integration}</div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="json" className="mt-3">
+                <Textarea
+                  className={`font-mono text-xs min-h-[220px] ${vaultOk ? "" : "border-red-500"}`}
+                  value={vaultJson}
+                  onChange={(e) => setVaultJson(e.target.value)}
+                />
+                <div className="flex gap-2 mt-2">
+                  <Button size="sm" onClick={importVaultFromJson}>
+                    <RefreshCcw className="mr-2 h-4 w-4" /> Apply JSON
+                  </Button>
+                  {!vaultOk && (
+                    <Badge variant="destructive" className="gap-1 text-xs">
+                      <AlertTriangle className="h-3 w-3" /> JSON parse error
+                    </Badge>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="ingest" className="mt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm opacity-80">
+                    Drop any file to add a ledger entry (simulated embedding)
+                  </div>
+                  <Input
+                    type="file"
+                    className="max-w-xs"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) ingestFile(f);
+                    }}
+                  />
+                </div>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+
+        {/* Encoder / Decoder */}
+        <Card className="border-slate-800/60">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <FileCode2 className="h-5 w-5" />
+              <CardTitle>Number‑Pipe Encoder (toy)</CardTitle>
+              <Badge className="ml-auto" variant="outline">not compression</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <div className="text-xs mb-1">Text → BigInt (decimal)</div>
+              <Textarea
+                className="font-mono text-xs min-h-[120px]"
+                value={encodeIn}
+                onChange={(e) => setEncodeIn(e.target.value)}
+                placeholder="Type any text here..."
+              />
+              <div className="flex gap-2 mt-2">
+                <Button
+                  size="sm"
+                  onClick={() => setEncoded(textToBigIntString(encodeIn))}
+                >
+                  <Wand2 className="mr-2 h-4 w-4" /> Encode
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => navigator.clipboard.writeText(encoded)}
+                >
+                  <ClipboardCopy className="mr-2 h-4 w-4" /> Copy
+                </Button>
+              </div>
+              <Textarea
+                className="font-mono text-xs mt-2 min-h-[90px]"
+                readOnly
+                value={encoded}
+                placeholder="Encoded number will appear here"
+              />
+            </div>
+            <div>
+              <div className="text-xs mb-1">BigInt (decimal) → Text</div>
+              <Textarea
+                className="font-mono text-xs min-h-[120px]"
+                value={decodeIn}
+                onChange={(e) => setDecodeIn(e.target.value)}
+                placeholder="Paste a big integer string..."
+              />
+              <div className="flex gap-2 mt-2">
+                <Button size="sm" onClick={() => setDecoded(bigIntStringToText(decodeIn))}>
+                  <Wand2 className="mr-2 h-4 w-4" /> Decode
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setDecodeIn("")}>Clear</Button>
+              </div>
+              <Textarea
+                className="font-mono text-xs mt-2 min-h-[90px]"
+                readOnly
+                value={decoded}
+                placeholder="Decoded text will appear here"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* RIGHT: Orchestrator */}
+      <div className="space-y-4">
+        <Card className="border-slate-800/60">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5" />
+              <CardTitle>Quantum‑Harmonic Orchestrator</CardTitle>
+              <Badge className="ml-auto" variant="secondary">sovereign</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col md:flex-row gap-2">
+              <Textarea
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+                placeholder="e.g., Build a TS/TSX canvas that bundles projects and exports reproducible artifacts"
+                className="min-h-[80px]"
+              />
+              <div className="grid grid-cols-2 md:grid-cols-1 gap-2 min-w-[220px]">
+                <Button onClick={() => runOrchestrator(false)} disabled={busy}>
+                  <Play className="mr-2 h-4 w-4" /> Start
+                </Button>
+                <Button variant="secondary" onClick={() => runOrchestrator(true)} disabled={busy}>
+                  <RefreshCcw className="mr-2 h-4 w-4" /> Refine
+                </Button>
+                <Button variant="outline" onClick={() => speak(finalOut)} disabled={!finalOut}>
+                  <Activity className="mr-2 h-4 w-4" /> Speak
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs flex items-center gap-2">
+                <Gauge className="h-4 w-4" /> Coherence: {Math.round(coherenceBar)}%
+              </div>
+              <Progress value={coherenceBar} className="h-2" />
+              {dissonance && (
+                <div className="text-amber-400 text-xs flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" /> Dissonance detected — re‑equilibrating…
+                </div>
+              )}
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-3">
+              <Card className="bg-slate-900/40 border-slate-800/60">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">App Synthesizer</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea readOnly className="min-h-[120px] text-xs" value={appOut} />
+                </CardContent>
+              </Card>
+              <Card className="bg-slate-900/40 border-slate-800/60">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Strategic Planner</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea readOnly className="min-h-[120px] text-xs" value={planOut} />
+                </CardContent>
+              </Card>
+              <Card className="bg-slate-900/40 border-slate-800/60">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Creative Modulator</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea readOnly className="min-h-[120px] text-xs" value={creaOut} />
+                </CardContent>
+              </Card>
+            </div>
+
+            <div>
+              <div className="text-sm mb-1 font-medium">Final Coherent Output</div>
+              <Textarea readOnly className="min-h-[130px] text-sm" value={finalOut} />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-800/60">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5" />
+              <CardTitle>Knowledge Base Stream</CardTitle>
+              <Badge className="ml-auto" variant="outline">live</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-52 overflow-auto text-xs space-y-1">
+              {kb.map((line, i) => (
+                <div key={i} className="opacity-90">
+                  {line}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

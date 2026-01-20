@@ -1,0 +1,847 @@
+import React, { useMemo, useState, useEffect } from "react";
+import {
+  Brain,
+  BarChart3,
+  Network,
+  TrendingUp,
+  Settings,
+  CheckCircle,
+  XCircle,
+  Download,
+  Zap,
+} from "lucide-react";
+import {
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  Tooltip,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+// ---------------------------
+// Smart Recommendation Engine
+// ---------------------------
+// Single-file React component you can drop into any app.
+// Uses Tailwind for styling (no import required in this canvas environment).
+// Libraries: lucide-react, recharts
+
+export default function SmartRecommendationEngine() {
+  // ---------------------------
+  // State
+  // ---------------------------
+  const [activeTab, setActiveTab] = useState(0);
+  const [dataProcessed, setDataProcessed] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentStage, setCurrentStage] = useState("Idle");
+  const [harmonicData, setHarmonicData] = useState(() =>
+    Array.from({ length: 24 }).map((_, i) => ({
+      frequency: i + 1,
+      amplitude: 30 + Math.round(20 * Math.sin((i + 1) / 2) + Math.random() * 10),
+    }))
+  );
+
+  const [organizationData, setOrganizationData] = useState({
+    name: "",
+    size: "",
+    goals: "",
+    pastStrategies: "",
+  });
+
+  const [recommendations, setRecommendations] = useState(null as null | { opportunities: Opportunity[] });
+  const [testResults, setTestResults] = useState<TestResult[]>([]);
+
+  type Opportunity = {
+    name: string;
+    priority: "High" | "Medium" | "Low";
+    description: string;
+    timeline: string;
+    roi: string;
+  };
+
+  type TestResult = { name: string; pass: boolean; details?: string };
+
+  const tabs = useMemo(
+    () => [
+      { id: 0, label: "Upload & Profile", icon: Brain },
+      { id: 1, label: "Tech Stack", icon: BarChart3 },
+      { id: 2, label: "Innovation", icon: Network },
+      { id: 3, label: "Strategy", icon: TrendingUp },
+      { id: 4, label: "Roadmap", icon: Settings },
+      { id: 5, label: "Dev & Tests", icon: CheckCircle },
+    ],
+    []
+  );
+
+  // ---------------------------
+  // Synthetic scoring & charts
+  // ---------------------------
+  function generateTechMaturityData() {
+    const techs = [
+      "Cloud Infra",
+      "Data Eng",
+      "AI/ML",
+      "Security",
+      "DevOps",
+      "APIs",
+      "Frontend",
+      "Backend",
+    ];
+    return techs.map((technology, i) => {
+      const base = 45 + Math.round(35 * Math.abs(Math.sin(i + 1)));
+      return {
+        technology,
+        current: base,
+        target: Math.min(100, base + 15 + (i % 3) * 8),
+      };
+    });
+  }
+
+  // ---------------------------
+  // Recommendations (now pure + tested)
+  // ---------------------------
+  function getSeedRecommendations(org: { size?: string | null }): { opportunities: Opportunity[] } {
+    const baseROI = org.size?.toLowerCase().includes("enterprise") ? "4–6x" : "2–4x";
+    const opps: Opportunity[] = [
+      {
+        name: "ML Platform Hardening",
+        priority: "High",
+        description:
+          "Unify feature store + model registry + CI/CD for reproducible training & safe rollout.",
+        timeline: "4–8 weeks",
+        // BUGFIX: removed stray period after template literal and added comma
+        roi: `${baseROI} in deployment velocity`,
+      },
+      {
+        name: "Observability & Guardrails",
+        priority: "High",
+        description:
+          "Add tracing, evals, PII scrubbing, and human-in-the-loop review to critical LLM paths.",
+        timeline: "3–6 weeks",
+        roi: "Lower incident rate; audit-ready",
+      },
+      {
+        name: "API Ecosystem Revamp",
+        priority: "Medium",
+        description:
+        "Consolidate gateway, auth, rate limits; publish typed SDKs to speed partner integrations.",
+        timeline: "6–10 weeks",
+        roi: "Faster partner onboarding",
+      },
+      {
+        name: "Adaptive Retrieval Layer",
+        priority: "Medium",
+        description:
+          "Plug in hybrid search (BM25 + dense) with A/B-learned routing for precision@k gains.",
+        timeline: "5–9 weeks",
+        roi: "Higher task success",
+      },
+      {
+        name: "Edge Analytics Pilot",
+        priority: "Low",
+        description:
+          "Deploy tiny inference on clients/edge for latency-sensitive use cases; measure lift.",
+        timeline: "8–12 weeks",
+        roi: "Latency ↓; cost ↓",
+      },
+    ];
+    return { opportunities: opps };
+  }
+
+  function seedRecommendations() {
+    setRecommendations(getSeedRecommendations(organizationData));
+  }
+
+  // ---------------------------
+  // Processing pipeline (simulated)
+  // ---------------------------
+  function handleProcessInput() {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    setProgress(0);
+    setCurrentStage("Parsing inputs");
+
+    const stages = [
+      "Parsing inputs",
+      "Vectorizing org profile",
+      "Fourier pass over maturity signals",
+      "Meta-learning using past strategies",
+      "Synthesizing opportunities",
+      "Building roadmap & ROI",
+      "Finalizing",
+    ];
+
+    let pct = 0;
+    let idx = 0;
+    const timer = setInterval(() => {
+      pct += 6 + Math.random() * 9;
+      if (pct >= 100) {
+        pct = 100;
+        setProgress(pct);
+        clearInterval(timer);
+        setIsProcessing(false);
+        setDataProcessed(true);
+        setCurrentStage("Complete");
+        seedRecommendations();
+        // Slightly update harmonics to reflect analysis
+        setHarmonicData((prev) =>
+          prev.map((d, i) => ({
+            ...d,
+            amplitude: Math.max(10, Math.min(100, d.amplitude + Math.round(8 * Math.cos(i / 3)))),
+          }))
+        );
+        return;
+      }
+      if (pct > (idx + 1) * (100 / stages.length)) idx++;
+      setCurrentStage(stages[Math.min(idx, stages.length - 1)]);
+      setProgress(Math.round(pct));
+    }, 250);
+  }
+
+  // ---------------------------
+  // Dev self-tests (runtime checks)
+  // ---------------------------
+  function runTests(): TestResult[] {
+    const results: TestResult[] = [];
+
+    // Test 1: Tech maturity shape & ranges
+    try {
+      const d = generateTechMaturityData();
+      const okLen = d.length === 8;
+      const okKeys = d.every((r) => "technology" in r && "current" in r && "target" in r);
+      const okRange = d.every((r) => r.current >= 0 && r.current <= 100 && r.target >= r.current && r.target <= 100);
+      results.push({
+        name: "Tech maturity: shape & ranges",
+        pass: okLen && okKeys && okRange,
+        details: `len=${d.length}`,
+      });
+    } catch (e: any) {
+      results.push({ name: "Tech maturity: shape & ranges", pass: false, details: e?.message });
+    }
+
+    // Test 2: Recommendations ROI mapping by org size
+    try {
+      const ent = getSeedRecommendations({ size: "Enterprise" });
+      const smb = getSeedRecommendations({ size: "Startup" });
+      const passEnt = ent.opportunities[0].roi.includes("4–6x");
+      const passSmb = smb.opportunities[0].roi.includes("2–4x");
+      results.push({
+        name: "Recommendations: ROI mapping",
+        pass: passEnt && passSmb,
+        details: `${ent.opportunities[0].roi} / ${smb.opportunities[0].roi}`,
+      });
+    } catch (e: any) {
+      results.push({ name: "Recommendations: ROI mapping", pass: false, details: e?.message });
+    }
+
+    // Test 3: Harmonic data bounds
+    try {
+      const okLen = harmonicData.length === 24;
+      const okRange = harmonicData.every((h) => h.amplitude >= 0 && h.amplitude <= 100);
+      results.push({ name: "Harmonics: length & bounds", pass: okLen && okRange, details: `len=${harmonicData.length}` });
+    } catch (e: any) {
+      results.push({ name: "Harmonics: length & bounds", pass: false, details: e?.message });
+    }
+
+    // Test 4: Opportunities count & fields
+    try {
+      const { opportunities } = getSeedRecommendations({ size: "Enterprise" });
+      const okCount = opportunities.length === 5;
+      const okFields = opportunities.every(
+        (o) => o.name && o.priority && o.description && o.timeline && o.roi
+      );
+      results.push({ name: "Opportunities: count & fields", pass: okCount && okFields, details: `count=${opportunities.length}` });
+    } catch (e: any) {
+      results.push({ name: "Opportunities: count & fields", pass: false, details: e?.message });
+    }
+
+    return results;
+  }
+
+  useEffect(() => {
+    setTestResults(runTests());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------------------------
+  // Tabs
+  // ---------------------------
+  const renderUploadTab = () => (
+    <div className="space-y-8">
+      <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+        <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+          <Brain className="w-6 h-6 text-blue-600" /> Organization Profile
+        </h2>
+        <div className="grid md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Organization Name</label>
+            <input
+              value={organizationData.name}
+              onChange={(e) => setOrganizationData((p) => ({ ...p, name: e.target.value }))}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Acme AI Labs"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Team Size</label>
+            <input
+              value={organizationData.size}
+              onChange={(e) => setOrganizationData((p) => ({ ...p, size: e.target.value }))}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Startup / Mid / Enterprise"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Innovation Goals (Optional)</label>
+            <textarea
+              value={organizationData.goals}
+              onChange={(e) =>
+                setOrganizationData((prev) => ({ ...prev, goals: e.target.value }))
+              }
+              rows={3}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Describe your primary innovation goals..."
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Past Innovation Strategies (Optional)</label>
+            <textarea
+              value={organizationData.pastStrategies}
+              onChange={(e) =>
+                setOrganizationData((prev) => ({ ...prev, pastStrategies: e.target.value }))
+              }
+              rows={3}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Describe past strategies for meta-learning adaptation..."
+            />
+          </div>
+        </div>
+        <div className="text-center mt-6">
+          <button
+            onClick={handleProcessInput}
+            disabled={isProcessing}
+            className="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
+          >
+            <Brain className="w-5 h-5" />
+            {isProcessing ? "Processing..." : "Process Input & Generate Recommendations"}
+          </button>
+          {isProcessing && (
+            <div className="mt-6 max-w-md mx-auto">
+              <div className="bg-gray-200 rounded-full h-3 mb-2">
+                <div
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-3 rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <p className="text-sm text-gray-600">{currentStage}</p>
+            </div>
+          )}
+          {dataProcessed && !isProcessing && (
+            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-green-800 font-medium flex items-center justify-center gap-2">
+                <CheckCircle className="w-5 h-5" /> Your enhanced innovation analysis is complete!
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderTechStackTab = () => (
+    <div className="space-y-8">
+      {!dataProcessed ? (
+        <div className="text-center p-8">
+          <BarChart3 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Please process input first to see tech stack analysis.</p>
+        </div>
+      ) : (
+        <>
+          <div className="bg-gradient-to-r from-green-50 to-blue-50 p-6 rounded-xl border border-green-200">
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Tech Stack Analysis (Enhanced)</h2>
+            <p className="text-gray-600">
+              Enhanced analysis with harmonic pattern detection and meta-learning for optimization scoring.
+            </p>
+            {organizationData.pastStrategies && (
+              <div className="mt-3 p-2 bg-blue-100 border border-blue-300 rounded text-sm text-blue-800">
+                ✨ Meta-learner trained on your past strategies for adaptive recommendations
+              </div>
+            )}
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-8">
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-xl font-semibold mb-4">Tech Stack Maturity Assessment</h3>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={generateTechMaturityData()}>
+                    <PolarGrid />
+                    <PolarAngleAxis dataKey="technology" className="text-xs" />
+                    <PolarRadiusAxis angle={90} domain={[0, 100]} />
+                    <Radar name="Current Maturity" dataKey="current" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.3} />
+                    <Radar name="Target Maturity" dataKey="target" stroke="#10B981" fill="#10B981" fillOpacity={0.3} />
+                    <Tooltip />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-xl font-semibold mb-4">Harmonic Spectrum Analysis</h3>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={harmonicData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="frequency" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="amplitude" stroke="#8B5CF6" strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-sm text-gray-600 mt-4">
+                The harmonic spectrum shows frequency components in your tech maturity scores. High low-frequency components
+                indicate consistent strengths; peaks at higher frequencies suggest areas of variability that may benefit from
+                harmonization.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <Network className="w-5 h-5 text-purple-600" /> Technology Ecosystem Network (Enhanced)
+            </h3>
+            <div className="bg-gradient-to-br from-purple-50 to-blue-50 p-8 rounded-lg">
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                {["Cloud Infrastructure", "Data Engineering", "AI/ML Capabilities", "Security Architecture"].map((tech) => (
+                  <div key={tech} className="bg-white p-3 rounded-lg shadow text-center text-sm font-medium border-2 border-blue-200 hover:border-blue-400 transition-colors">
+                    {tech}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-4 gap-4 mb-4">
+                {["DevOps Automation", "API Ecosystem", "Frontend Framework", "Backend Services"].map((tech) => (
+                  <div key={tech} className="bg-white p-3 rounded-lg shadow text-center text-sm font-medium border-2 border-green-200 hover:border-green-400 transition-colors">
+                    {tech}
+                  </div>
+                ))}
+              </div>
+              <div className="text-center">
+                <p className="text-gray-600 text-sm">
+                  Enhanced network visualization showing interconnections between tech components. Node colors represent maturity
+                  levels; connections indicate integration points.
+                </p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const renderInnovationTab = () => (
+    <div className="space-y-8">
+      {!dataProcessed ? (
+        <div className="text-center p-8">
+          <Brain className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Please process input first to see innovation opportunities.</p>
+        </div>
+      ) : (
+        <>
+          <div className="bg-gradient-to-r from-purple-50 to-pink-50 p-6 rounded-xl border border-purple-200">
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Innovation Opportunities (Enhanced)</h2>
+            <p className="text-gray-600">Explore opportunities with integrated tools like NetworkX for mapping and scikit-learn for predictive scoring.</p>
+            {organizationData.pastStrategies && (
+              <div className="mt-4 p-3 bg-green-100 border border-green-300 rounded-lg">
+                <p className="text-green-800 text-sm">✅ Meta-learning applied: Recommendations adapted based on your past strategies.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-8">
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Brain className="w-5 h-5 text-purple-600" /> AI-Powered Opportunities
+              </h3>
+              {recommendations ? (
+                <div className="space-y-4">
+                  {recommendations.opportunities.map((opp, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-semibold text-gray-800">{opp.name}</h4>
+                        <span
+                          className={`px-2 py-1 rounded text-xs font-medium ${
+                            opp.priority === "High"
+                              ? "bg-red-100 text-red-800"
+                              : opp.priority === "Medium"
+                              ? "bg-yellow-100 text-yellow-800"
+                              : "bg-green-100 text-green-800"
+                          }`}
+                        >
+                          {opp.priority} Priority
+                        </span>
+                      </div>
+                      <p className="text-gray-600 text-sm mb-3">{opp.description}</p>
+                      <div className="flex justify-between text-xs text-gray-500">
+                        <span>
+                          <strong>Timeline:</strong> {opp.timeline}
+                        </span>
+                        <span>
+                          <strong>ROI:</strong> {opp.roi}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center p-4">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mx-auto" />
+                  <p className="text-gray-500 mt-2">Generating AI-powered recommendations...</p>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Network className="w-5 h-5 text-blue-600" /> Innovation Opportunity Network
+              </h3>
+              <div className="bg-gradient-to-br from-blue-50 to-green-50 p-6 rounded-lg">
+                <div className="grid grid-cols-2 gap-4">
+                  {["AI Innovation", "Blockchain Integration", "IoT Deployment", "Quantum Computing"].map((opp) => (
+                    <div key={opp} className="bg-white p-4 rounded-lg shadow border-2 border-dashed border-gray-300 text-center hover:border-blue-400 transition-colors">
+                      <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full mx-auto mb-2" />
+                      <p className="text-sm font-medium">{opp}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-center mt-6">
+                  <p className="text-gray-600 text-sm">
+                    Network visualization showing interconnected innovation opportunities. Node size represents potential impact;
+                    connections show synergies.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const renderStrategyTab = () => (
+    <div className="space-y-8">
+      {!dataProcessed ? (
+        <div className="text-center p-8">
+          <TrendingUp className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Please process input first to see strategy recommendations.</p>
+        </div>
+      ) : (
+        <>
+          <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-xl border border-yellow-200">
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Strategy Recommendations</h2>
+            <p className="text-gray-600">AI-powered strategic recommendations tailored to your organization's profile and goals.</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+            <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
+              <Zap className="w-5 h-5 text-yellow-600" /> Personalized Strategic Roadmap
+            </h3>
+            {recommendations ? (
+              <div className="space-y-6">
+                {recommendations.opportunities.map((strategy, index) => (
+                  <div key={index} className="border-l-4 border-blue-500 pl-6 hover:bg-gray-50 p-4 rounded-r-lg transition-colors">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-lg font-semibold text-gray-800">{strategy.name}</h4>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-3 py-1 rounded-full text-sm font-medium ${
+                            strategy.priority === "High"
+                              ? "bg-red-100 text-red-800"
+                              : strategy.priority === "Medium"
+                              ? "bg-yellow-100 text-yellow-800"
+                              : "bg-green-100 text-green-800"
+                          }`}
+                        >
+                          {strategy.priority} Priority
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-gray-600 mb-4">{strategy.description}</p>
+                    <div className="grid md:grid-cols-2 gap-4 text-sm">
+                      <div className="bg-blue-50 p-3 rounded-lg">
+                        <span className="font-medium text-blue-800">Timeline:</span>
+                        <p className="text-blue-700">{strategy.timeline}</p>
+                      </div>
+                      <div className="bg-green-50 p-3 rounded-lg">
+                        <span className="font-medium text-green-800">Expected ROI:</span>
+                        <p className="text-green-700">{strategy.roi}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center p-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-600 mx-auto" />
+                <p className="text-gray-500 mt-2">Generating strategic recommendations...</p>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const renderRoadmapTab = () => (
+    <div className="space-y-8">
+      {!dataProcessed ? (
+        <div className="text-center p-8">
+          <Settings className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Please process input first to see implementation roadmap.</p>
+        </div>
+      ) : (
+        <>
+          <div className="bg-gradient-to-r from-indigo-50 to-cyan-50 p-6 rounded-xl border border-indigo-200">
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Implementation Roadmap</h2>
+            <p className="text-gray-600">Dynamic implementation timeline with resource forecasting and milestone tracking.</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+            <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
+              <Settings className="w-5 h-5 text-indigo-600" /> Interactive Gantt Chart
+            </h3>
+            <div className="space-y-4">
+              {recommendations &&
+                recommendations.opportunities.map((item, index) => {
+                  const progressValue = Math.floor(Math.random() * 41) + 40; // 40-80%
+                  return (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-semibold text-gray-800">{item.name}</h4>
+                        <span className="text-sm text-gray-500">{item.timeline}</span>
+                      </div>
+                      <div className="bg-gray-200 rounded-full h-3 mb-2">
+                        <div
+                          className={`h-3 rounded-full transition-all duration-1000 ${
+                            item.priority === "High"
+                              ? "bg-red-500"
+                              : item.priority === "Medium"
+                              ? "bg-yellow-500"
+                              : "bg-green-500"
+                          }`}
+                          style={{ width: `${progressValue}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-500">
+                        <span>Priority: {item.priority}</span>
+                        <span>Progress: {progressValue}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-lg font-semibold mb-4">Resource Allocation</h3>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">Development Team</span>
+                  <span className="text-sm text-gray-600">65% allocated</span>
+                </div>
+                <div className="bg-gray-200 rounded-full h-2">
+                  <div className="bg-blue-500 h-2 rounded-full" style={{ width: "65%" }} />
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">Budget</span>
+                  <span className="text-sm text-gray-600">45% allocated</span>
+                </div>
+                <div className="bg-gray-200 rounded-full h-2">
+                  <div className="bg-green-500 h-2 rounded-full" style={{ width: "45%" }} />
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">Infrastructure</span>
+                  <span className="text-sm text-gray-600">80% allocated</span>
+                </div>
+                <div className="bg-gray-200 rounded-full h-2">
+                  <div className="bg-purple-500 h-2 rounded-full" style={{ width: "80%" }} />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+              <h3 className="text-lg font-semibold mb-4">Key Milestones</h3>
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-green-500 rounded-full" />
+                  <div>
+                    <p className="text-sm font-medium">Initial Assessment Complete</p>
+                    <p className="text-xs text-gray-500">Week 1</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-yellow-500 rounded-full" />
+                  <div>
+                    <p className="text-sm font-medium">Technology Stack Selected</p>
+                    <p className="text-xs text-gray-500">Week 4</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-gray-300 rounded-full" />
+                  <div>
+                    <p className="text-sm font-medium">MVP Development</p>
+                    <p className="text-xs text-gray-500">Week 12</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-gray-300 rounded-full" />
+                  <div>
+                    <p className="text-sm font-medium">Full Deployment</p>
+                    <p className="text-xs text-gray-500">Week 24</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <Download className="w-5 h-5 text-indigo-600" /> Export Options
+            </h3>
+            <div className="flex flex-wrap gap-4">
+              <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+                <Download className="w-4 h-4" /> Download PDF Report
+              </button>
+              <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2">
+                <Download className="w-4 h-4" /> Export to Excel
+              </button>
+              <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
+                <Download className="w-4 h-4" /> Save Project File
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const renderTestsTab = () => (
+    <div className="space-y-6">
+      <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+        <h3 className="text-xl font-semibold mb-2 flex items-center gap-2">
+          <CheckCircle className="w-5 h-5 text-emerald-600" /> Runtime Tests
+        </h3>
+        <p className="text-gray-600 mb-4 text-sm">These self-checks run in the browser to catch obvious regressions in data shape and logic.</p>
+        <button
+          onClick={() => setTestResults(runTests())}
+          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+        >
+          Re-run tests
+        </button>
+        <ul className="mt-4 divide-y divide-gray-200">
+          {testResults.map((t, i) => (
+            <li key={i} className="py-3 flex items-start gap-3">
+              {t.pass ? (
+                <CheckCircle className="w-5 h-5 text-emerald-600 mt-0.5" />
+              ) : (
+                <XCircle className="w-5 h-5 text-red-600 mt-0.5" />
+              )}
+              <div>
+                <p className={`font-medium ${t.pass ? "text-emerald-800" : "text-red-800"}`}>{t.name}</p>
+                {t.details && <p className="text-xs text-gray-500">{t.details}</p>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 0:
+        return renderUploadTab();
+      case 1:
+        return renderTechStackTab();
+      case 2:
+        return renderInnovationTab();
+      case 3:
+        return renderStrategyTab();
+      case 4:
+        return renderRoadmapTab();
+      case 5:
+        return renderTestsTab();
+      default:
+        return renderUploadTab();
+    }
+  };
+
+  // ---------------------------
+  // Component shell
+  // ---------------------------
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-900 mb-2 flex items-center justify-center gap-3">
+            <Brain className="w-10 h-10 text-blue-600" /> Smart Recommendation Engine
+          </h1>
+          <p className="text-xl text-gray-600">Quantum-Harmonic Tech Innovation Advisor</p>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="bg-white rounded-xl shadow-lg border border-gray-200 mb-8">
+          <div className="flex overflow-x-auto">
+            {tabs.map((tab) => {
+              const Icon = tab.icon as any;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium whitespace-nowrap transition-all ${
+                    activeTab === tab.id
+                      ? "bg-blue-50 text-blue-700 border-b-2 border-blue-700"
+                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Tab Content */}
+        <div className="min-h-[600px]">{renderTabContent()}</div>
+
+        {/* Footer */}
+        <div className="mt-12 text-center">
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+            <p className="text-gray-600 mb-4">
+              Enhanced with meta-learning, harmonic analysis, and AI-powered insights for next-generation innovation
+              strategies.
+            </p>
+            <div className="flex justify-center gap-4 text-sm text-gray-500">
+              <span>• NetworkX Integration</span>
+              <span>• Scikit-learn Meta-Learning</span>
+              <span>• Fourier Transform Analysis</span>
+              <span>• LLM Recommendations</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

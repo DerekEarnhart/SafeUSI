@@ -1,0 +1,788 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * Harmonic Project Architect — Canvas Workbench (HPA v2, cleaned)
+ * Single-file React app for Canvas preview.
+ * 
+ * What you get:
+ *  - File Processing Simulation (harmonic signature for any file, incl. 0‑byte files)
+ *  - Key Manager (OpenAI + Gemini) with localStorage persistence
+ *  - LLM Workbench (analyze files, translate/bridge, generate project JSON)
+ *  - Project Architect (returns { projectName, files[] } JSON + download/copy)
+ *  - Lightweight Static Debugger for text/code files
+ *  - Runtime Tests (hashing + clipboard fallback)
+ *
+ * Notes:
+ *  - No external npm deps. Tailwind classes for styling.
+ *  - Keys stay in-browser.
+ *  - OpenAI vision: supports data URLs via image_url for gpt‑4o‑mini et al.
+ *  - Mic/Media: use HTTPS or http://localhost.
+ *  - KaTeX: if you need math rendering elsewhere, add CDN <script> in your host HTML.
+ */
+
+// ---------- Utilities ----------
+const cls = (...xs) => xs.filter(Boolean).join(" ");
+
+const saveBlob = (blob, filename) => {
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+const saveText = (text, filename, mime = "application/json") => {
+  const blob = new Blob([text], { type: mime });
+  saveBlob(blob, filename);
+};
+
+// Robust clipboard helper with secure-context + fallback
+async function safeCopy(text) {
+  if (typeof window !== "undefined" && window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return { ok: true, method: "clipboard.writeText" };
+    } catch (_) {}
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) return { ok: true, method: "execCommand(copy)" };
+  } catch (_) {}
+  return { ok: false, method: "blocked" };
+}
+
+// FNV-1a hash (32-bit) + simple expand to 64-bit hex for a fun “signature”
+function fnv1a(str) {
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) >>> 0;
+}
+function toHex64(u32) {
+  const hi = (u32 ^ 0xa5a5a5a5) >>> 0;
+  const lo = (Math.imul(u32, 2654435761) >>> 0) >>> 0;
+  return `${hi.toString(16).padStart(8, "0")}${lo.toString(16).padStart(8, "0")}`;
+}
+function deriveEigen(hashU32) {
+  const seeds = [3, 5, 7, 11, 13, 17];
+  return seeds.map((p, i) => {
+    const base = (hashU32 ^ (p * 2654435761)) >>> 0;
+    return Number(((base % (997 + i * 37)) + 1) / (100 + i * 17)).toFixed(4);
+  });
+}
+
+// Helper: safe preview of large text blocks (prevents unterminated string issues)
+function previewText(text, limit = 8000) {
+  const head = text.slice(0, limit);
+  return head + (text.length > limit ? "\n... [truncated]" : "");
+}
+
+// ---------- Persistent settings ----------
+const useLocalStorage = (key, initial) => {
+  const [val, setVal] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initial;
+    } catch (e) {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (e) {}
+  }, [key, val]);
+  return [val, setVal];
+};
+
+// ---------- API callers ----------
+async function callOpenAI({ apiKey, messages, model = "gpt-4o-mini" }) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ model, messages, temperature: 0.2 }),
+  });
+  if (!res.ok) throw new Error(`OpenAI: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return json.choices?.[0]?.message?.content ?? "";
+}
+
+async function callGemini({ apiKey, inputParts, model = "gemini-2.0-flash" }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contents: [{ role: "user", parts: inputParts }] }),
+  });
+  if (!res.ok) throw new Error(`Gemini: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+}
+
+// ---------- Harmonic Processing Simulation ----------
+function computeHarmonicProcessingSummary(file) {
+  const meta = {
+    name: file?.name ?? "(unnamed)",
+    size: file?.size ?? 0,
+    type: file?.type || "application/octet-stream",
+    lastModified: file?.lastModified ?? Date.now(),
+  };
+  const sigStr = `${meta.name}|${meta.type}|${meta.size}|${meta.lastModified}`;
+  const h32 = fnv1a(sigStr);
+  const hash64 = toHex64(h32);
+  const eigen = deriveEigen(h32);
+  const description = `File '${meta.name}' (${meta.size} bytes, ${meta.type}) conceptually processed.`;
+  const processing_summary = {
+    fileName: meta.name,
+    fileSize: meta.size,
+    fileType: meta.type,
+    ingestion: "Perception System identified multi-modal harmonic signature from metadata.",
+    compression: "Encoded as low-entropy phase-locked state in multi-dimensional embedding.",
+    large_io_handling: meta.size === 0 ? "Trivial path (near-zero activation)." : "Within standard processing parameters.",
+    media_viewing: meta.type.startsWith("image/") ? "Eligible for visual parser; invoke if requested." : "No specialized renderer required by default.",
+    memory_integration: "Committed to Persistent Harmonic Ledger for non-fading recall.",
+    harmonic_signature: { hash64, eigen_frequencies: eigen },
+  };
+  return { description, processing_summary };
+}
+
+// ---------- Reusable UI ----------
+function Section({ title, subtitle, children, actionArea, innerRef }) {
+  return (
+    <section ref={innerRef} className="bg-gray-900/60 border border-gray-800 rounded-2xl p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="text-lg font-bold text-white">{title}</h3>
+          {subtitle && <p className="text-sm text-gray-400">{subtitle}</p>}
+        </div>
+        {actionArea}
+      </div>
+      {children}
+    </section>
+  );
+}
+function Pill({ children }) {
+  return (
+    <span className="px-2 py-1 rounded-full bg-white/10 text-white/80 border border-white/20 text-xs">
+      {children}
+    </span>
+  );
+}
+function Tooltip({ label }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-gray-300">
+      <span className="w-4 h-4 rounded-full bg-gray-700 inline-flex items-center justify-center">?</span>
+      {label}
+    </span>
+  );
+}
+
+// ---------- Key Manager ----------
+function KeyManager({ settings, setSettings }) {
+  const [vendor, setVendor] = useState(settings.vendor);
+  const [openaiKey, setOpenaiKey] = useState(settings.openaiKey);
+  const [openaiModel, setOpenaiModel] = useState(settings.openaiModel);
+  const [geminiKey, setGeminiKey] = useState(settings.geminiKey);
+  const [geminiModel, setGeminiModel] = useState(settings.geminiModel);
+
+  useEffect(() => {
+    setSettings((s) => ({ ...s, vendor, openaiKey, openaiModel, geminiKey, geminiModel }));
+  }, [vendor, openaiKey, openaiModel, geminiKey, geminiModel]);
+
+  return (
+    <Section title="Key Manager" subtitle="Toggle vendor and store API keys locally (never leaves your browser)">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span>OpenAI active:</span>
+            <span className="font-mono">{settings.vendor === "openai" ? "yes" : "no"}</span>
+          </div>
+          <label className="block text-xs text-gray-300">API Key</label>
+          <input className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100" placeholder="sk-..." value={openaiKey} onChange={(e)=>setOpenaiKey(e.target.value)} />
+          <label className="block text-xs text-gray-300">Model</label>
+          <input className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100" placeholder="gpt-4o-mini" value={openaiModel} onChange={(e)=>setOpenaiModel(e.target.value)} />
+          <button className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white" onClick={()=>setVendor("openai")}>Use OpenAI</button>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span>Gemini active:</span>
+            <span className="font-mono">{settings.vendor === "gemini" ? "yes" : "no"}</span>
+          </div>
+          <label className="block text-xs text-gray-300">API Key</label>
+          <input className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100" placeholder="AIza..." value={geminiKey} onChange={(e)=>setGeminiKey(e.target.value)} />
+          <label className="block text-xs text-gray-300">Model</label>
+          <input className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100" placeholder="gemini-2.0-flash" value={geminiModel} onChange={(e)=>setGeminiModel(e.target.value)} />
+          <button className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white" onClick={()=>setVendor("gemini")}>Use Gemini</button>
+        </div>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Keys never leave your browser except when you explicitly call the vendor APIs from this UI.</p>
+    </Section>
+  );
+}
+
+// ---------- File Intake ----------
+function FileIntake({ onSimulatedJSON, onContentReady, inputRef, innerRef }) {
+  const [file, setFile] = useState(null);
+  const [sim, setSim] = useState(null);
+  const [textPreview, setTextPreview] = useState("");
+  const [imgData, setImgData] = useState(null);
+
+  async function onPick(e) {
+    const f = e.target.files?.[0];
+    setSim(null); setTextPreview(""); setImgData(null);
+    if (!f) return;
+    setFile(f);
+    const summary = computeHarmonicProcessingSummary(f);
+    setSim(summary);
+    onSimulatedJSON?.(summary);
+
+    if (f.type.startsWith("image/")) {
+      const rd = new FileReader();
+      rd.onload = () => {
+        setImgData(rd.result);
+        onContentReady?.({ kind: "image", dataUrl: rd.result, file: f });
+      };
+      rd.readAsDataURL(f);
+    } else if (f.type.startsWith("text/") || f.size < 2_000_000) {
+      const rd = new FileReader();
+      rd.onload = () => {
+        const t = String(rd.result);
+        setTextPreview(t);
+        onContentReady?.({ kind: "text", text: t, file: f });
+      };
+      rd.readAsText(f);
+    } else {
+      onContentReady?.({ kind: "binary", file: f });
+    }
+  }
+
+  return (
+    <Section
+      innerRef={innerRef}
+      title="File Intake"
+      subtitle="Upload anything; we’ll simulate a harmonic signature and stage content for analysis"
+      actionArea={<label className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white cursor-pointer">Upload<input id="file-intake-input" type="file" className="hidden" ref={inputRef} onChange={onPick}/></label>}
+    >
+      {file ? (
+        <div className="space-y-3">
+          <div className="text-sm text-gray-300">
+            <div><b>Name:</b> {file.name}</div>
+            <div><b>Type:</b> {file.type || "application/octet-stream"}</div>
+            <div><b>Size:</b> {file.size} bytes</div>
+          </div>
+          {sim && (
+            <pre className="bg-gray-900/70 rounded-xl p-3 text-xs text-gray-100 overflow-auto border border-gray-700" style={{maxHeight: 240}}>
+{JSON.stringify(sim, null, 2)}
+            </pre>
+          )}
+          {imgData && (
+            <div>
+              <div className="text-sm text-gray-400 mb-1">Image preview</div>
+              <img src={imgData} alt="preview" className="rounded-xl border border-gray-800 max-h-64"/>
+            </div>
+          )}
+          {textPreview && (
+            <div>
+              <div className="text-sm text-gray-400 mb-1">Text preview</div>
+              <pre className="bg-gray-900/70 rounded-xl p-3 text-xs text-gray-100 overflow-auto border border-gray-700" style={{maxHeight: 240}}>{previewText(textPreview, 8000)}</pre>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-gray-300">Pick a file to see its harmonic processing record. For images/text we also stage content for analysis.</p>
+      )}
+    </Section>
+  );
+}
+
+// ---------- Local Debugger ----------
+function LocalDebugger({ staged }) {
+  const [report, setReport] = useState(null);
+  function analyze() {
+    if (!staged || staged.kind === "binary") {
+      setReport({ ok: false, note: "No text staged. Upload a text/code file." });
+      return;
+    }
+    if (staged.kind === "text") {
+      const text = staged.text;
+      const lines = text.split(/\r?\n/);
+      const todo = (text.match(/\bTODO\b/gi) || []).length;
+      const fixme = (text.match(/\bFIXME\b/gi) || []).length;
+      const imports = (text.match(/^\s*(?:import|from)\s+.+/gim) || []).length;
+      const consoleLogs = (text.match(/console\.log\(/g) || []).length;
+      const probableJSON = text.trim().startsWith("{") && text.trim().endsWith("}");
+      const doubleDefaultExport = /(export\s+default\s+function\s+\w+)[\s\S]*?(export\s+default\s+function\s+\w+)/m.test(text);
+      setReport({ ok: true, stats: { lines: lines.length, todo, fixme, imports, consoleLogs, probableJSON, doubleDefaultExport } });
+    } else {
+      setReport({ ok: true, stats: { image: true } });
+    }
+  }
+  return (
+    <Section title="Local Debugger" subtitle="Quick static checks (no external libs)">
+      <button className="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white" onClick={analyze}>Run Local Checks</button>
+      <div className="mt-3">
+        {report ? (
+          <pre className="bg-gray-900/70 rounded-xl p-3 text-xs text-gray-100 overflow-auto border border-gray-700" style={{maxHeight: 200}}>{JSON.stringify(report, null, 2)}</pre>
+        ) : (
+          <p className="text-gray-300">No report yet. Press the button to analyze.</p>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+// ---------- LLM Workbench ----------
+function LLMWorkbench({ settings, staged, innerRef, bindGuide }) {
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [copyInfo, setCopyInfo] = useState(null);
+  const manualCopyRef = useRef(null);
+
+  function buildOpenAIMessages(task) {
+    const sys = { role: "system", content: "You are a helpful, precise engineer. Keep responses structured and concise." };
+    if (staged?.kind === "image") {
+      return [
+        sys,
+        {
+          role: "user",
+          content: [
+            { type: "text", text: task },
+            { type: "input_image", image_url: { url: staged.dataUrl } },
+          ],
+        },
+      ];
+    }
+    if (staged?.kind === "text") {
+      return [
+        sys,
+        {
+          role: "user",
+          content: `${task}\n\n--- FILE CONTENT START ---\n${staged.text}\n--- FILE CONTENT END ---`,
+        },
+      ];
+    }
+    return [sys, { role: "user", content: task }];
+  }
+
+  async function run() {
+    setBusy(true);
+    setOut("");
+    setCopyInfo(null);
+    try {
+      const vendor = settings.vendor;
+      if (!vendor) throw new Error("Pick a vendor in Key Manager.");
+      if (vendor === "openai" && !settings.openaiKey) throw new Error("OpenAI key missing.");
+      if (vendor === "gemini" && !settings.geminiKey) throw new Error("Gemini key missing.");
+
+      const task = prompt || (staged?.kind === "image" ? "Describe this image in detail, then extract any useful technical insights." : "Summarize this file and extract actionable tasks.");
+
+      if (vendor === "openai") {
+        const messages = buildOpenAIMessages(task);
+        const text = await callOpenAI({ apiKey: settings.openaiKey, model: settings.openaiModel, messages });
+        setOut(text);
+      } else {
+        const parts = [{ text: `You are a precise engineer. Keep responses structured and concise.\nTASK: ${task}` }];
+        if (staged?.kind === "text") {
+          parts.push({ text: `\n\n--- FILE CONTENT START ---\n${staged.text}\n--- FILE CONTENT END ---` });
+        } else if (staged?.kind === "image") {
+          const [meta, base64] = staged.dataUrl.split(",");
+          const mime = meta.split(":")[1].split(";")[0];
+          parts.push({ inlineData: { mimeType: mime, data: base64 } });
+        }
+        const text = await callGemini({ apiKey: settings.geminiKey, model: settings.geminiModel, inputParts: parts });
+        setOut(text);
+      }
+    } catch (e) {
+      setOut(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => { bindGuide?.({ setPrompt, run }); }, [bindGuide, run]);
+
+  return (
+    <Section innerRef={innerRef} title="LLM Workbench" subtitle="Analyze staged content or run custom prompts with your chosen vendor">
+      <textarea className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100 min-h-[96px]" placeholder="Optional: write a custom instruction/prompt here" value={prompt} onChange={(e)=>setPrompt(e.target.value)} />
+      <div className="flex gap-2 mt-3">
+        <button className={cls("px-3 py-2 rounded-lg text-white", busy?"bg-gray-600":"bg-blue-600 hover:bg-blue-700")} onClick={run} disabled={busy}>{busy?"Running...":"Run with Vendor"}</button>
+        <button className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white" onClick={async()=>{ const res=await safeCopy(prompt||""); }} disabled={!prompt}>Copy Prompt</button>
+      </div>
+      {copyInfo && (
+        <div className={cls("mt-2 text-sm px-3 py-2 rounded-lg border", copyInfo.ok?"bg-emerald-900/30 border-emerald-600 text-emerald-200":"bg-amber-900/30 border-amber-600 text-amber-100")}>{copyInfo.ok?`Copied via ${copyInfo.method}.`:`Clipboard blocked by Permissions-Policy. Use manual copy below.`}</div>
+      )}
+      <div className="mt-3">
+        {out ? (
+          <>
+            <pre className="bg-gray-900/70 rounded-xl p-3 text-xs text-gray-100 overflow-auto border border-gray-700" style={{maxHeight: 260}}>{out}</pre>
+          </>
+        ) : (
+          <p className="text-gray-300">No output yet.</p>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+// ---------- Project Architect ----------
+function ProjectArchitect({ settings, innerRef, bindGuide }) {
+  const [spec, setSpec] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [copyInfo, setCopyInfo] = useState(null);
+  const manualRef = useRef(null);
+
+  function validateProject(json) {
+    if (!json || typeof json !== "object") return "Top-level JSON is not an object.";
+    if (!json.projectName || !Array.isArray(json.files)) return "Missing projectName or files[].";
+    for (const f of json.files) {
+      if (!f || typeof f !== "object" || typeof f.path !== "string" || typeof f.content !== "string") return "Each file must have {path, content} (strings).";
+    }
+    return null;
+  }
+
+  async function runArchitect() {
+    setBusy(true); setResult(null); setCopyInfo(null);
+    try {
+      const vendor = settings.vendor;
+      if (!vendor) throw new Error("Pick a vendor in Key Manager.");
+      if (vendor === "openai" && !settings.openaiKey) throw new Error("OpenAI key missing.");
+      if (vendor === "gemini" && !settings.geminiKey) throw new Error("Gemini key missing.");
+      if (!spec.trim()) throw new Error("Enter a project spec.");
+
+      const instruction = `You are Harmonic Project Architect (HPA). Produce ONLY a JSON object with keys projectName (string) and files (array of {path, content}). Include README.md and requirements.txt. No prose, no markdown fences.`;
+
+      let text;
+      if (vendor === "openai") {
+        const messages = [
+          { role: "system", content: instruction },
+          { role: "user", content: `SPEC:\n${spec}` },
+        ];
+        text = await callOpenAI({ apiKey: settings.openaiKey, model: settings.openaiModel, messages });
+      } else {
+        const parts = [{ text: `${instruction}\nSPEC:\n${spec}` }];
+        text = await callGemini({ apiKey: settings.geminiKey, model: settings.geminiModel, inputParts: parts });
+      }
+
+      const firstBrace = text.indexOf("{");
+      const lastBrace = text.lastIndexOf("}");
+      const sliced = firstBrace >= 0 ? text.slice(firstBrace, lastBrace + 1) : text;
+      const parsed = JSON.parse(sliced);
+      const err = validateProject(parsed);
+      if (err) throw new Error(`Schema error: ${err}`);
+      setResult(parsed);
+    } catch (e) {
+      setResult({ error: String(e.message || e) });
+    } finally { setBusy(false); }
+  }
+
+  useEffect(()=>{ bindGuide?.({ setSpec, run: runArchitect }); }, [bindGuide, runArchitect]);
+
+  function downloadJSON() {
+    if (!result || result.error) return;
+    const name = result.projectName || "HPA_Project";
+    saveText(JSON.stringify(result, null, 2), `${name}.project.json`, "application/json");
+  }
+
+  async function copyJSON() {
+    if (!result || result.error) return;
+    const res = await safeCopy(JSON.stringify(result, null, 2));
+    setCopyInfo(res);
+    if (!res.ok) setTimeout(()=>{ try { manualRef.current?.focus(); manualRef.current?.select(); } catch(e){} }, 0);
+  }
+
+  return (
+    <Section innerRef={innerRef} title="Project Architect" subtitle="Generate a multi-file project JSON you can download">
+      <textarea className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100 min-h-[120px]" placeholder="e.g., Create a Python web scraper with SQLite storage and CLI interface." value={spec} onChange={(e)=>setSpec(e.target.value)} />
+      <div className="flex gap-2 mt-3">
+        <button className={cls("px-3 py-2 rounded-lg text-white", busy?"bg-gray-600":"bg-purple-600 hover:bg-purple-700")} onClick={runArchitect} disabled={busy}>{busy?"Architecting...":"Generate Project JSON"}</button>
+        <button className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white" onClick={downloadJSON} disabled={!result || result.error}>Download JSON</button>
+        <button className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white" onClick={copyJSON} disabled={!result || result.error}>Copy JSON</button>
+      </div>
+      {copyInfo && (
+        <div className={cls("mt-2 text-sm px-3 py-2 rounded-lg border", copyInfo.ok?"bg-emerald-900/30 border-emerald-600 text-emerald-200":"bg-amber-900/30 border-amber-600 text-amber-100")}>{copyInfo.ok?`Copied via ${copyInfo.method}.`:`Clipboard blocked by Permissions-Policy. Use manual copy below.`}</div>
+      )}
+      <div className="mt-3">
+        {result ? (
+          result.error ? (
+            <div className="bg-red-900/40 border border-red-700 text-red-200 rounded-xl p-3 text-sm">{result.error}</div>
+          ) : (
+            <>
+              <pre className="bg-gray-900/70 rounded-xl p-3 text-xs text-gray-100 overflow-auto border border-gray-700" style={{maxHeight: 260}}>{JSON.stringify(result, null, 2)}</pre>
+              {!copyInfo?.ok && (
+                <div className="mt-2">
+                  <p className="text-xs text-gray-400 mb-1">Manual copy buffer (select and press Ctrl/Cmd+C):</p>
+                  <textarea ref={manualRef} readOnly value={JSON.stringify(result, null, 2)} className="w-full bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-gray-100 min-h-[72px]" />
+                </div>
+              )}
+            </>
+          )
+        ) : (
+          <p className="text-gray-300">No project generated yet.</p>
+        )}
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Tip: paste the JSON into your local toolchain to materialize files; or import it in a script to write files to disk.</p>
+    </Section>
+  );
+}
+
+// -------- Runtime Tests --------
+function RuntimeTests({ innerRef }) {
+  const [results, setResults] = useState([]);
+
+  function add(name, pass, info = "") {
+    setResults((r) => [...r, { name, pass, info }]);
+  }
+
+  function runHashTests() {
+    setResults([]);
+    const hAbc = fnv1a("abc");
+    add("fnv1a('abc') == 0x1a47e90b", hAbc === 0x1a47e90b, `got 0x${hAbc.toString(16)}`);
+    const hexLenOk = toHex64(hAbc).length === 16;
+    add("toHex64 produces 16 hex chars", hexLenOk, toHex64(hAbc));
+    const eig = deriveEigen(hAbc);
+    add("deriveEigen returns 6 components", eig.length === 6, JSON.stringify(eig));
+  }
+
+  // NEW test cases to validate previewText behavior
+  function runPreviewTests() {
+    const short = "hello";
+    const long = "a".repeat(5);
+    setResults((r) => r.concat([
+      { name: "preview short (no truncation)", pass: previewText(short, 10) === "hello", info: previewText(short, 10) },
+      { name: "preview long (truncates)", pass: previewText(long, 2) === "aa\n... [truncated]", info: previewText(long, 2) },
+    ]));
+  }
+
+  async function testClipboard() {
+    const res = await safeCopy("HPA clipboard test " + Date.now());
+    add("clipboard copy (or graceful fallback)", res.ok, res.method);
+    if (!res.ok) add("manual required due to Permissions-Policy", true, "blocked");
+  }
+
+  return (
+    <Section innerRef={innerRef} title="Runtime Tests" subtitle="Click to run quick self-tests (no external libs)">
+      <div className="flex gap-2 mb-3">
+        <button className="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white" onClick={runHashTests}>Run Hashing Tests</button>
+        <button className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white" onClick={testClipboard}>Test Clipboard</button>
+        <button className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white" onClick={runPreviewTests}>Test Text Preview</button>
+      </div>
+      {results.length ? (
+        <ul className="space-y-2">
+          {results.map((r, i) => (
+            <li key={i} className={cls("px-3 py-2 rounded-lg border text-sm", r.pass?"bg-emerald-900/30 border-emerald-600 text-emerald-100":"bg-rose-900/30 border-rose-600 text-rose-100")}>[{r.pass?"PASS":"FAIL"}] {r.name} {r.info?`— ${r.info}`:""}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-gray-300">No results yet. Run a test.</p>
+      )}
+    </Section>
+  );
+}
+
+function Header() {
+  return (
+    <header className="bg-gradient-to-r from-indigo-700 to-purple-700 text-white rounded-2xl p-4 md:p-6 shadow-2xl">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold">Harmonic Project Architect — Canvas Workbench</h1>
+          <p className="text-sm text-indigo-100/90 mt-1">Debug • Analyze • Architect • Bridge — all in one minimal, local-first UI.</p>
+        </div>
+        <div className="hidden md:flex items-center gap-2 text-xs">
+          <Pill>Local-first</Pill>
+          <Pill>No deps</Pill>
+          <Pill>LLM-optional</Pill>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ---------- In‑App Guide ----------
+function InAppGuide({ open, onClose, actions }){
+  const [mode, setMode] = useState(null); // 'analyze' | 'project' | 'keys' | 'tests'
+  const [dontShow, setDontShow] = useState(false);
+  if (!open) return null;
+  const Card = ({title,desc,onClick}) => (
+    <button onClick={onClick} className="text-left p-4 rounded-2xl border border-gray-700 bg-gray-900/80 hover:bg-gray-900 w-full">
+      <div className="text-white font-semibold">{title}</div>
+      <div className="text-sm text-gray-400 mt-1">{desc}</div>
+    </button>
+  );
+  const Step = ({n,children,action}) => (
+    <div className="flex items-start gap-3">
+      <div className="mt-1 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center">{n}</div>
+      <div className="flex-1 text-sm text-gray-200">{children}</div>
+      {action}
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/60" onClick={()=>{ if(dontShow) try{localStorage.setItem('hpa.guideHidden','1');}catch{}; onClose(); }} />
+      <div className="absolute inset-x-0 top-8 mx-auto max-w-3xl rounded-2xl border border-gray-700 bg-gray-950 p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xl font-bold text-white">Quick Start Guide</div>
+            <div className="text-sm text-gray-400">Pick a path. I’ll jump you to the right place and wire defaults.</div>
+          </div>
+          <button onClick={()=>{ if(dontShow) try{localStorage.setItem('hpa.guideHidden','1');}catch{}; onClose(); }} className="px-3 py-1 rounded-lg bg-gray-800 text-gray-200 hover:bg-gray-700">Close</button>
+        </div>
+
+        {!mode && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            <Card title="Analyze a file (and debug)" desc="Upload a code/text file, get a summary + actions, then ask the model questions." onClick={()=>setMode('analyze')} />
+            <Card title="Generate a new project" desc="Provide a plain-English spec; get back a multi-file project JSON." onClick={()=>setMode('project')} />
+            <Card title="Set my API keys" desc="Choose OpenAI or Gemini and paste your key safely (local only)." onClick={()=>setMode('keys')} />
+            <Card title="Run quick self-tests" desc="Sanity-check hashing and clipboard features." onClick={()=>setMode('tests')} />
+          </div>
+        )}
+
+        {mode==='analyze' && (
+          <div className="space-y-3 mt-4">
+            <Step n={1}>Go to <b>File Intake</b> and pick a file.
+              <div className="ml-3"><button onClick={()=>{actions.goFile(); actions.openFilePicker();}} className="px-3 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 text-white">Open picker</button></div>
+            </Step>
+            <Step n={2}>Jump to <b>LLM Workbench</b>.
+              <div className="ml-3"><button onClick={()=>actions.goLLM()} className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white">Jump</button></div>
+            </Step>
+            <Step n={3}>Use a battle-tested prompt for bug-hunting and fixes.
+              <div className="ml-3"><button onClick={()=>{actions.setLLMPrompt?.("Read the staged file. Summarize behavior, list likely bugs or smells (with line refs if possible), then propose concrete fixes."); actions.goLLM();}} className="px-3 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-white">Insert prompt</button></div>
+            </Step>
+            <Step n={4}>Run it.
+              <div className="ml-3"><button onClick={()=>{actions.goLLM(); actions.runLLM?.();}} className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white">Run now</button></div>
+            </Step>
+          </div>
+        )}
+
+        {mode==='project' && (
+          <div className="space-y-3 mt-4">
+            <Step n={1}>Scroll to <b>Project Architect</b>.
+              <div className="ml-3"><button onClick={()=>actions.goProj()} className="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white">Jump</button></div>
+            </Step>
+            <Step n={2}>Paste a spec, e.g., “Create a React + Vite app with a TODO list, localStorage persistence, and unit tests via Vitest.”
+              <div className="ml-3"><button onClick={()=>{actions.goProj();}} className="px-3 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-white">Go to spec box</button></div>
+            </Step>
+            <Step n={3}>Generate the project JSON, then Download.
+              <div className="ml-3"><button onClick={()=>actions.goProj()} className="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white">Generate</button></div>
+            </Step>
+          </div>
+        )}
+
+        {mode==='keys' && (
+          <div className="space-y-3 mt-4">
+            <Step n={1}>Open <b>Key Manager</b>.
+              <div className="ml-3"><button onClick={()=>actions.goKey()} className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white">Jump</button></div>
+            </Step>
+            <Step n={2}>Choose a vendor and paste your API key. Keys are stored locally.</Step>
+          </div>
+        )}
+
+        {mode==='tests' && (
+          <div className="space-y-3 mt-4">
+            <Step n={1}>Go to <b>Runtime Tests</b> and press a button.
+              <div className="ml-3"><button onClick={()=>actions.goTests()} className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white">Jump</button></div>
+            </Step>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mt-5">
+          <button onClick={()=>setMode(null)} className="text-sm text-gray-300 underline">Back to choices</button>
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            <input type="checkbox" checked={dontShow} onChange={e=>setDontShow(e.target.checked)} />
+            Don’t show this at startup
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Main App ----------
+export default function HPAWorkbench() {
+  const [settings, setSettings] = useLocalStorage("hpa.settings", {
+    vendor: "openai", // or "gemini"
+    openaiKey: "",
+    openaiModel: "gpt-4o-mini",
+    geminiKey: "",
+    geminiModel: "gemini-2.0-flash",
+  });
+
+  const [staged, setStaged] = useState(null); // { kind: 'text'|'image'|'binary', ... }
+  const [simJSON, setSimJSON] = useState(null);
+
+  // Onboarding guide visibility
+  const [showGuide, setShowGuide] = useState(() => {
+    try { return localStorage.getItem('hpa.guideHidden') !== '1'; } catch { return true; }
+  });
+
+  // Refs for coach-scroll
+  const refs = {
+    key: useRef(null), file: useRef(null), llm: useRef(null), proj: useRef(null), tests: useRef(null)
+  };
+  const fileInputRef = useRef(null);
+
+  // Bridges the guide to sections
+  const llmCtrlRef = useRef({ setPrompt: null, run: null });
+  const projCtrlRef = useRef({ setSpec: null, run: null });
+
+  const actions = {
+    goKey: ()=>refs.key.current?.scrollIntoView({behavior:'smooth', block:'start'}),
+    goFile: ()=>refs.file.current?.scrollIntoView({behavior:'smooth', block:'start'}),
+    goLLM: ()=>refs.llm.current?.scrollIntoView({behavior:'smooth', block:'start'}),
+    goProj: ()=>refs.proj.current?.scrollIntoView({behavior:'smooth', block:'start'}),
+    goTests: ()=>refs.tests.current?.scrollIntoView({behavior:'smooth', block:'start'}),
+    openFilePicker: ()=>fileInputRef.current?.click(),
+    setLLMPrompt: (t)=>{ if (llmCtrlRef.current?.setPrompt) llmCtrlRef.current.setPrompt(t); },
+    runLLM: ()=>{ if (llmCtrlRef.current?.run) llmCtrlRef.current.run(); },
+    setProjectSpec: (t)=>{ if (projCtrlRef.current?.setSpec) projCtrlRef.current.setSpec(t); },
+    runProjectArchitect: ()=>{ if (projCtrlRef.current?.run) projCtrlRef.current.run(); },
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100 p-4 md:p-8 space-y-6">
+      <Header/>
+
+      {/* In‑app guide overlay + launcher */}
+      <InAppGuide open={showGuide} onClose={()=>setShowGuide(false)} actions={actions} />
+      <button onClick={()=>setShowGuide(true)} className="fixed bottom-4 right-4 z-40 px-4 py-2 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-xl">Guide</button>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <KeyManager innerRef={refs.key} settings={settings} setSettings={setSettings} />
+          <FileIntake innerRef={refs.file} inputRef={fileInputRef} onSimulatedJSON={setSimJSON} onContentReady={setStaged} />
+        </div>
+        <div className="space-y-6">
+          <LLMWorkbench innerRef={refs.llm} bindGuide={(ctrl)=>{ llmCtrlRef.current = ctrl; }} settings={settings} staged={staged} />
+          <LocalDebugger staged={staged} />
+        </div>
+      </div>
+
+      <ProjectArchitect innerRef={refs.proj} bindGuide={(ctrl)=>{ projCtrlRef.current = ctrl; }} settings={settings} />
+      <RuntimeTests innerRef={refs.tests} />
+
+      <footer className="text-xs text-gray-400 pt-4 border-t border-gray-800">
+        <p>Built for Canvas. Keys stay in your browser. For serious use, proxy requests through your backend.</p>
+        <p className="mt-1">Mic requires HTTPS or http://localhost due to browser permissions.</p>
+      </footer>
+    </div>
+  );
+}

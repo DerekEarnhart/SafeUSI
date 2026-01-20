@@ -1,0 +1,69 @@
+import os
+import sys
+import subprocess
+import requests
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+# A more robust installation script to handle dependency setup and model check
+
+def run_command(command, description):
+    """Utility function to run a shell command and check for errors."""
+    print(f"\n--- {description} ---")
+    try:
+        subprocess.run(command, check=True, text=True, capture_output=True)
+        print("✅ SUCCESS")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FAILED: {e.stderr}")
+        print(f"❌ Aborting due to failed command: {command}")
+        return False
+    except FileNotFoundError:
+        print(f"❌ FAILED: The command '{command[0]}' was not found. Is it in your PATH?")
+        return False
+
+def check_model_availability(model_name):
+    """Checks if the specified model is available and working."""
+    print(f"\n--- Verifying access to model: '{model_name}' ---")
+    try:
+        from google import genai
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+        model = genai.GenerativeModel(model_name=model_name)
+        response = model.generate_content("hello world", safety_settings={
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        })
+        print("✅ Model is reachable and responding.")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: Could not access the model '{model_name}'. Error: {e}")
+        print("Please ensure your API key is correctly set and the model name is valid.")
+        return False
+
+def main():
+    """Main function to run the installation and verification."""
+    print("= Hodge AGI Toolkit Installation & Verification =")
+
+    # Step 1: Install required Python packages
+    if not run_command([sys.executable, '-m', 'pip', 'install', '-U', '-q', 'google-generativeai'], "Installing 'google-generativeai'"):
+        return
+
+    # Step 2: Check for API Key
+    if not os.environ.get("GEMINI_API_KEY"):
+        print("\n❌ API Key not found!")
+        print("Please set your GEMINI_API_KEY environment variable.")
+        return
+
+    # Step 3: Check for model availability
+    if not check_model_availability("gemini-1.5-pro"):
+        print("\n❌ Model verification failed. Please check your network and API key.")
+        return
+
+    print("\n-----------------------------------------------------")
+    print("🎉 All core components are installed and verified!")
+    print("You can now proceed with running your scripts.")
+    print("-----------------------------------------------------")
+
+if __name__ == "__main__":
+    main()

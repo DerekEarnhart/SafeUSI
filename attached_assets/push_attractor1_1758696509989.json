@@ -1,0 +1,2 @@
+# { "bt_input": [1.0, 1.0, 1.0, 1.0, 1.0] }
+curl -X POST -H "Content-Type: application/json" -d @push_attractor1.json http://127.0.0.1:5000/consciousness/update
