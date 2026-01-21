@@ -5,18 +5,16 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { lazy, Suspense } from "react";
-import ProtectedRoute from "@/components/ProtectedRoute";
 
 // Lazy load route components to prevent module evaluation crashes
 const MarketingPage = lazy(() => import("@/pages/marketing"));
 const LoginPage = lazy(() => import("@/pages/login"));
 const Dashboard = lazy(() => import("@/pages/dashboard"));
-const EnhancedDashboard = lazy(() => import("@/components/enhanced-dashboard").then(module => ({ default: module.EnhancedDashboard })));
 const Commercial = lazy(() => import("@/pages/commercial"));
-const Programming = lazy(() => import("@/pages/programming"));
 const VMBenchmarking = lazy(() => import("@/pages/vm-benchmarking"));
 const HKMTraining = lazy(() => import("@/pages/hkm-training"));
 const Admin = lazy(() => import("@/pages/admin"));
+const Settings = lazy(() => import("@/pages/settings"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function Router() {
@@ -36,21 +34,25 @@ function Router() {
         {/* Public login page */}
         <Route path="/login" component={LoginPage} />
         
-        {/* Protected technical routes */}
+        {/* Main dashboard */}
         <Route path="/dashboard" component={Dashboard} />
         
-        <Route path="/enhanced" component={EnhancedDashboard} />
-        
+        {/* Commercial API */}
         <Route path="/commercial" component={Commercial} />
         
-        <Route path="/programming" component={Programming} />
-        
+        {/* VM Benchmarking */}
         <Route path="/vm-benchmarking" component={VMBenchmarking} />
         
+        {/* HKM Training */}
         <Route path="/hkm-training" component={HKMTraining} />
         
+        {/* Admin Panel */}
         <Route path="/admin" component={Admin} />
         
+        {/* Settings */}
+        <Route path="/settings" component={Settings} />
+        
+        {/* 404 */}
         <Route component={NotFound} />
       </Switch>
     </Suspense>

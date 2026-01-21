@@ -1,13 +1,33 @@
+import { useState } from "react";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { ProposalReview } from "@/components/admin/ProposalReview";
-import { WaitingListManagement } from "@/components/dashboard/WaitingListManagement";
-import { FeatureFlagManagement } from "@/components/dashboard/FeatureFlagManagement";
-import { Shield, Settings, Users, Flag, Cpu, Link } from "lucide-react";
-import { useLocation } from "wouter";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { 
+  Shield, 
+  Settings, 
+  Users, 
+  Flag, 
+  Home,
+  DollarSign,
+  Activity,
+  Database,
+  Server,
+  CheckCircle,
+  AlertTriangle
+} from "lucide-react";
+import { Link } from "wouter";
 
 export default function Admin() {
-  const [location] = useLocation();
+  const [features, setFeatures] = useState({
+    fileUpload: true,
+    ragChat: true,
+    commercialApi: true,
+    vmBenchmarking: false
+  });
 
   const formatTime = () => {
     return new Date().toLocaleString('en-US', {
@@ -22,192 +42,234 @@ export default function Admin() {
   };
 
   return (
-    <div className="min-h-screen quantum-grid">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-lg sticky top-0 z-50">
+      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-lg sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="pulse-glow bg-red-500 rounded-full p-2">
+            {/* Logo */}
+            <div className="flex items-center space-x-3">
+              <div className="bg-gradient-to-br from-red-500 to-rose-600 rounded-lg p-2">
                 <Shield className="text-white h-6 w-6" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold gradient-text-primary">
-                  WSM Administration Console
+                <h1 className="text-xl font-bold bg-gradient-to-r from-red-400 to-rose-400 bg-clip-text text-transparent">
+                  Admin Panel
                 </h1>
-                <p className="text-sm text-muted-foreground">Platform management and oversight</p>
+                <p className="text-xs text-slate-400">System Management</p>
               </div>
             </div>
             
-            <div className="flex items-center space-x-6">
-              {/* Navigation Links */}
-              <div className="flex items-center space-x-4">
-                <Link href="/" className="flex items-center space-x-2 px-3 py-2 rounded-lg hover:bg-accent/20 transition-colors" data-testid="link-dashboard">
-                  <Cpu className="h-4 w-4" />
-                  <span className="text-sm font-medium">Dashboard</span>
-                </Link>
-              </div>
-              
-              {/* Current Time */}
-              <div className="text-sm font-mono text-muted-foreground">
+            {/* Navigation */}
+            <nav className="flex items-center space-x-4">
+              <Link href="/dashboard">
+                <Button variant="ghost" size="sm" className="text-slate-300 hover:text-white">
+                  <Home className="h-4 w-4 mr-2" />
+                  Dashboard
+                </Button>
+              </Link>
+              <Link href="/commercial">
+                <Button variant="ghost" size="sm" className="text-slate-300 hover:text-white">
+                  <DollarSign className="h-4 w-4 mr-2" />
+                  API
+                </Button>
+              </Link>
+              <div className="text-sm font-mono text-slate-500">
                 {formatTime()}
               </div>
-            </div>
+            </nav>
           </div>
         </div>
       </header>
 
-      {/* Main Admin Content */}
-      <main className="container mx-auto px-6 py-6 space-y-6">
+      {/* Main Content */}
+      <main className="container mx-auto px-6 py-8">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold gradient-text-primary mb-2">Administration Panel</h2>
-          <p className="text-muted-foreground">
-            Manage system operations, user access, and platform enhancements
-          </p>
+          <h2 className="text-3xl font-bold text-white mb-2">Administration</h2>
+          <p className="text-slate-400">Manage system settings, users, and features</p>
         </div>
 
-        <Tabs defaultValue="proposals" className="w-full" data-testid="admin-tabs">
-          <TabsList className="grid w-full grid-cols-4" data-testid="admin-tabs-list">
-            <TabsTrigger value="proposals" className="flex items-center space-x-2" data-testid="tab-proposals">
-              <Settings className="w-4 h-4" />
-              <span>VM Proposals</span>
+        <Tabs defaultValue="system" className="space-y-6">
+          <TabsList className="bg-slate-900/50 border border-slate-800">
+            <TabsTrigger value="system" className="data-[state=active]:bg-red-500/20 data-[state=active]:text-red-400">
+              <Server className="h-4 w-4 mr-2" />
+              System
             </TabsTrigger>
-            <TabsTrigger value="users" className="flex items-center space-x-2" data-testid="tab-users">
-              <Users className="w-4 h-4" />
-              <span>User Management</span>
+            <TabsTrigger value="features" className="data-[state=active]:bg-blue-500/20 data-[state=active]:text-blue-400">
+              <Flag className="h-4 w-4 mr-2" />
+              Features
             </TabsTrigger>
-            <TabsTrigger value="features" className="flex items-center space-x-2" data-testid="tab-features">
-              <Flag className="w-4 h-4" />
-              <span>Feature Flags</span>
-            </TabsTrigger>
-            <TabsTrigger value="system" className="flex items-center space-x-2" data-testid="tab-system">
-              <Shield className="w-4 h-4" />
-              <span>System</span>
+            <TabsTrigger value="users" className="data-[state=active]:bg-green-500/20 data-[state=active]:text-green-400">
+              <Users className="h-4 w-4 mr-2" />
+              Users
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="proposals" className="space-y-6">
-            <ProposalReview />
-          </TabsContent>
-
-          <TabsContent value="users" className="space-y-6">
-            <WaitingListManagement />
-          </TabsContent>
-
-          <TabsContent value="features" className="space-y-6">
-            <FeatureFlagManagement />
-          </TabsContent>
-
+          {/* System Tab */}
           <TabsContent value="system" className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Card data-testid="card-system-health">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Shield className="w-5 h-5" />
-                    <span>System Health</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm">WSM Engine</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-wsm-engine">Operational</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card className="bg-slate-900/50 border-slate-800">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-slate-400">API Status</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span className="text-lg font-semibold text-green-400">Healthy</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Database</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-database">Connected</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">WebSocket</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-websocket">Active</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Python Bridge</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-python-bridge">Ready</span>
-                    </div>
+                    <Activity className="h-8 w-8 text-green-400 opacity-50" />
                   </div>
                 </CardContent>
               </Card>
 
-              <Card data-testid="card-vm-monitor">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Cpu className="w-5 h-5" />
-                    <span>VM Monitor</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm">Active VMs</span>
-                      <span className="text-sm font-medium" data-testid="count-active-vms">0</span>
+              <Card className="bg-slate-900/50 border-slate-800">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-slate-400">Database</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span className="text-lg font-semibold text-green-400">Connected</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Total Proposals</span>
-                      <span className="text-sm font-medium" data-testid="count-total-proposals">-</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Registry Items</span>
-                      <span className="text-sm font-medium" data-testid="count-registry-items">-</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Deployed Tools</span>
-                      <span className="text-sm font-medium" data-testid="count-deployed-tools">-</span>
-                    </div>
+                    <Database className="h-8 w-8 text-blue-400 opacity-50" />
                   </div>
                 </CardContent>
               </Card>
 
-              <Card data-testid="card-security-overview">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Shield className="w-5 h-5" />
-                    <span>Security</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm">Validation Checks</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-validation">Enabled</span>
+              <Card className="bg-slate-900/50 border-slate-800">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-slate-400">WSM Engine</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span className="text-lg font-semibold text-green-400">Running</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Access Control</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-access-control">Active</span>
+                    <Server className="h-8 w-8 text-purple-400 opacity-50" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-slate-900/50 border-slate-800">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-slate-400">Memory</p>
+                      <p className="text-lg font-semibold text-white">847 MB</p>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Sandboxing</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-sandboxing">Enforced</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm">Audit Log</span>
-                      <span className="text-sm font-medium text-green-600" data-testid="status-audit-log">Recording</span>
-                    </div>
+                    <Settings className="h-8 w-8 text-amber-400 opacity-50" />
                   </div>
                 </CardContent>
               </Card>
             </div>
+
+            <Card className="bg-slate-900/50 border-slate-800">
+              <CardHeader>
+                <CardTitle className="text-white">System Information</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-slate-800/50 rounded-lg">
+                    <p className="text-sm text-slate-400">Version</p>
+                    <p className="text-lg font-semibold text-white">2.0.0</p>
+                  </div>
+                  <div className="p-4 bg-slate-800/50 rounded-lg">
+                    <p className="text-sm text-slate-400">Environment</p>
+                    <p className="text-lg font-semibold text-white">Production</p>
+                  </div>
+                  <div className="p-4 bg-slate-800/50 rounded-lg">
+                    <p className="text-sm text-slate-400">Uptime</p>
+                    <p className="text-lg font-semibold text-white">99.9%</p>
+                  </div>
+                  <div className="p-4 bg-slate-800/50 rounded-lg">
+                    <p className="text-sm text-slate-400">Region</p>
+                    <p className="text-lg font-semibold text-white">US-East</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Features Tab */}
+          <TabsContent value="features" className="space-y-6">
+            <Card className="bg-slate-900/50 border-slate-800">
+              <CardHeader>
+                <CardTitle className="text-white">Feature Flags</CardTitle>
+                <CardDescription className="text-slate-400">
+                  Enable or disable platform features
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-white">File Upload</Label>
+                    <p className="text-sm text-slate-400">Allow users to upload and process files</p>
+                  </div>
+                  <Switch 
+                    checked={features.fileUpload} 
+                    onCheckedChange={(checked) => setFeatures({...features, fileUpload: checked})}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-white">RAG Chat</Label>
+                    <p className="text-sm text-slate-400">Enable question-answering on uploaded files</p>
+                  </div>
+                  <Switch 
+                    checked={features.ragChat} 
+                    onCheckedChange={(checked) => setFeatures({...features, ragChat: checked})}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-white">Commercial API</Label>
+                    <p className="text-sm text-slate-400">Enable commercial API access</p>
+                  </div>
+                  <Switch 
+                    checked={features.commercialApi} 
+                    onCheckedChange={(checked) => setFeatures({...features, commercialApi: checked})}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="text-white">VM Benchmarking</Label>
+                    <p className="text-sm text-slate-400">Enable VM performance testing</p>
+                  </div>
+                  <Switch 
+                    checked={features.vmBenchmarking} 
+                    onCheckedChange={(checked) => setFeatures({...features, vmBenchmarking: checked})}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Users Tab */}
+          <TabsContent value="users" className="space-y-6">
+            <Card className="bg-slate-900/50 border-slate-800">
+              <CardHeader>
+                <CardTitle className="text-white">User Management</CardTitle>
+                <CardDescription className="text-slate-400">
+                  View and manage platform users
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center py-8 text-slate-400">
+                  <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No users registered yet</p>
+                  <p className="text-sm mt-2">Users will appear here when they sign up</p>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-border bg-card/30 backdrop-blur-lg mt-12">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-muted-foreground">
-              WSM-HA Administration v2.0.0 • Secure Management Interface
-            </div>
-            <div className="flex items-center space-x-4 text-sm text-muted-foreground">
-              <span>Admin Console</span>
-              <span>•</span>
-              <span>Restricted Access</span>
-              <span>•</span>
-              <span>Session: Active</span>
-            </div>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }
