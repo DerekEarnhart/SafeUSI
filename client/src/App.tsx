@@ -37,47 +37,19 @@ function Router() {
         <Route path="/login" component={LoginPage} />
         
         {/* Protected technical routes */}
-        <Route path="/dashboard">
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/dashboard" component={Dashboard} />
         
-        <Route path="/enhanced">
-          <ProtectedRoute>
-            <EnhancedDashboard />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/enhanced" component={EnhancedDashboard} />
         
-        <Route path="/commercial">
-          <ProtectedRoute>
-            <Commercial />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/commercial" component={Commercial} />
         
-        <Route path="/programming">
-          <ProtectedRoute>
-            <Programming />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/programming" component={Programming} />
         
-        <Route path="/vm-benchmarking">
-          <ProtectedRoute>
-            <VMBenchmarking />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/vm-benchmarking" component={VMBenchmarking} />
         
-        <Route path="/hkm-training">
-          <ProtectedRoute>
-            <HKMTraining />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/hkm-training" component={HKMTraining} />
         
-        <Route path="/admin">
-          <ProtectedRoute>
-            <Admin />
-          </ProtectedRoute>
-        </Route>
+        <Route path="/admin" component={Admin} />
         
         <Route component={NotFound} />
       </Switch>
