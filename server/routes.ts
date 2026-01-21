@@ -1462,6 +1462,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // In-memory file storage for fast access (fallback when DB is slow)
+  const inMemoryFiles = new Map<string, {
+    id: string;
+    filename: string;
+    originalName: string;
+    fileType: string;
+    fileSize: number;
+    filePath: string;
+    extractedText: string | null;
+    userId: string;
+    status: string;
+    createdAt: Date;
+  }>();
+
+  // Helper function with timeout for database operations
+  const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => 
+        setTimeout(() => reject(new Error('Database operation timed out')), ms)
+      )
+    ]);
+  };
+
   // Enhanced file upload endpoint with ChatGPT export support
   app.post('/api/process-file', upload.single('file'), async (req: Request & { file?: Express.Multer.File }, res) => {
     const startTime = Date.now();
@@ -1509,31 +1533,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             console.log(`ChatGPT export processed: ${conversationCount} conversations, ${messageCount} messages`);
           }
-        } catch (parseError) {
+        } catch (parseError: any) {
           console.log(`Not a valid ChatGPT export JSON: ${parseError.message}`);
           // Continue with regular processing
         }
       }
       
-      // Create uploaded file record with enhanced metadata
-      const uploadedFile = await storage.createUploadedFile({
+      // Prepare file data
+      const fileData = {
+        id: fileId,
         filename: filename || originalname,
         originalName: originalname,
         fileType: mimeType,
         fileSize: size,
         filePath: filePath,
         extractedText: extractionResult.success ? extractionResult.text : null,
-        userId: 'anonymous', // TODO: Add user authentication
-        status: extractionResult.success ? 'processed' : 'uploaded'
-      });
+        userId: 'anonymous',
+        status: extractionResult.success ? 'processed' : 'uploaded',
+        createdAt: new Date()
+      };
+      
+      // Store in memory immediately for fast access
+      inMemoryFiles.set(fileId, fileData);
+      
+      // Try to save to database with timeout, but don't block response
+      let dbFileId = fileId;
+      try {
+        const uploadedFile = await withTimeout(
+          storage.createUploadedFile({
+            filename: filename || originalname,
+            originalName: originalname,
+            fileType: mimeType,
+            fileSize: size,
+            filePath: filePath,
+            extractedText: extractionResult.success ? extractionResult.text : null,
+            userId: 'anonymous',
+            status: extractionResult.success ? 'processed' : 'uploaded'
+          }),
+          5000 // 5 second timeout for DB
+        );
+        dbFileId = uploadedFile.id;
+        // Update in-memory with DB id
+        inMemoryFiles.delete(fileId);
+        inMemoryFiles.set(dbFileId, { ...fileData, id: dbFileId });
+      } catch (dbError) {
+        console.warn('Database save failed, using in-memory storage:', dbError);
+        // Continue with in-memory storage - file is still usable
+      }
 
       const processingTime = Date.now() - startTime;
       
       console.log(`File uploaded successfully: ${originalname} (${size} bytes) in ${processingTime}ms`);
       
       res.json({ 
-        jobId: uploadedFile.id, 
-        fileId: uploadedFile.id,
+        jobId: dbFileId, 
+        fileId: dbFileId,
         status: 'completed',
         filename: originalname,
         fileSize: size,
@@ -1557,21 +1611,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get uploaded files
+  // Get uploaded files - check both DB and in-memory
   app.get('/api/uploaded-files', async (req, res) => {
     try {
       const userId = req.query.userId as string || 'anonymous';
-      const files = await storage.getUserUploadedFiles(userId);
-      res.json(files.map(file => ({
-        id: file.id,
-        filename: file.originalName,
-        fileSize: file.fileSize,
-        fileType: file.fileType,
-        status: file.status,
-        textExtracted: !!file.extractedText,
-        wordCount: file.extractedText ? file.extractedText.split(/\s+/).length : 0,
-        createdAt: file.createdAt
-      })));
+      
+      // Get files from in-memory storage
+      const memoryFiles = Array.from(inMemoryFiles.values())
+        .filter(file => file.userId === userId)
+        .map(file => ({
+          id: file.id,
+          filename: file.originalName,
+          fileSize: file.fileSize,
+          fileType: file.fileType,
+          status: file.status,
+          textExtracted: !!file.extractedText,
+          wordCount: file.extractedText ? file.extractedText.split(/\s+/).length : 0,
+          createdAt: file.createdAt
+        }));
+      
+      // Try to get files from database with timeout
+      let dbFiles: any[] = [];
+      try {
+        const files = await withTimeout(storage.getUserUploadedFiles(userId), 3000);
+        dbFiles = files.map(file => ({
+          id: file.id,
+          filename: file.originalName,
+          fileSize: file.fileSize,
+          fileType: file.fileType,
+          status: file.status,
+          textExtracted: !!file.extractedText,
+          wordCount: file.extractedText ? file.extractedText.split(/\s+/).length : 0,
+          createdAt: file.createdAt
+        }));
+      } catch (dbError) {
+        console.warn('Database fetch failed, using in-memory only:', dbError);
+      }
+      
+      // Merge and deduplicate (prefer DB records)
+      const dbIds = new Set(dbFiles.map(f => f.id));
+      const allFiles = [...dbFiles, ...memoryFiles.filter(f => !dbIds.has(f.id))];
+      
+      // Sort by createdAt descending
+      allFiles.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      res.json(allFiles);
     } catch (error) {
       console.error('Failed to get uploaded files:', error);
       res.status(500).json({ error: 'Failed to get uploaded files' });
@@ -1650,9 +1734,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const searchUserId = userId || 'anonymous';
+      const searchTerms = question.toLowerCase().split(' ').filter(t => t.length > 2);
       
-      // Search for relevant files
-      const relevantFiles = await storage.searchUploadedFiles(question, searchUserId);
+      // Get files from in-memory storage first
+      const memoryFiles = Array.from(inMemoryFiles.values())
+        .filter(file => file.userId === searchUserId && file.extractedText);
+      
+      // Try to get files from database with timeout
+      let dbFiles: any[] = [];
+      try {
+        dbFiles = await withTimeout(storage.searchUploadedFiles(question, searchUserId), 3000);
+      } catch (dbError) {
+        console.warn('Database search failed, using in-memory only:', dbError);
+      }
+      
+      // Merge files (prefer DB records, avoid duplicates)
+      const dbIds = new Set(dbFiles.map(f => f.id));
+      const allFiles = [...dbFiles, ...memoryFiles.filter(f => !dbIds.has(f.id))];
+      
+      // Filter by search terms for in-memory files
+      const relevantFiles = allFiles.filter(file => {
+        if (!file.extractedText) return false;
+        const text = file.extractedText.toLowerCase();
+        return searchTerms.some(term => text.includes(term));
+      });
       
       if (relevantFiles.length === 0) {
         return res.json({
@@ -1663,7 +1768,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Simple keyword-based answer generation
-      const searchTerms = question.toLowerCase().split(' ').filter(t => t.length > 2);
       let bestContext = '';
       let bestFile = null;
       let bestScore = 0;
