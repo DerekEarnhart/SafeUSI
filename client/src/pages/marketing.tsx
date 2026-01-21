@@ -201,7 +201,7 @@ export default function MarketingPage() {
                 variant="outline" 
                 size="sm" 
                 className="bg-transparent border-blue-400 text-blue-400 hover:bg-blue-400 hover:text-white transition-colors"
-                onClick={() => window.location.href = "/login"}
+                onClick={() => window.location.href = "/dashboard"}
                 data-testid="button-nav-login"
               >
                 <Users className="h-4 w-4 mr-2" />
