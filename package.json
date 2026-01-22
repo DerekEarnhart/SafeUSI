@@ -94,6 +94,7 @@
     "adm-zip": "^0.5.10",
     "xstate": "^5.21.0",
     "zod": "^3.24.2",
+    "streamdown": "^0.1.0",
     "zod-validation-error": "^3.4.0",
     "esbuild": "^0.25.0"
   },
