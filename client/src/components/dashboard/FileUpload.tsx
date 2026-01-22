@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Upload, File, CheckCircle, AlertCircle, X, FileArchive, Loader2 } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Upload, File, CheckCircle, AlertCircle, X, FileArchive, Loader2, Clock, Zap, HardDrive } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -15,6 +15,13 @@ interface UploadedFile {
   progress: number;
   wordCount?: number;
   fileType?: string;
+  // Enhanced progress tracking
+  uploadSpeed?: number;      // bytes per second
+  eta?: number;              // seconds remaining
+  bytesUploaded?: number;
+  startTime?: number;
+  chunksCompleted?: number;
+  totalChunks?: number;
 }
 
 interface ServerFile {
@@ -30,6 +37,8 @@ interface ServerFile {
 
 // Chunk size for large file uploads (5MB)
 const CHUNK_SIZE = 5 * 1024 * 1024;
+// Threshold for using chunked upload (100MB)
+const CHUNKED_UPLOAD_THRESHOLD = 100 * 1024 * 1024;
 
 export function FileUpload() {
   const [uploadingFiles, setUploadingFiles] = useState<UploadedFile[]>([]);
@@ -62,6 +71,38 @@ export function FileUpload() {
       }))
   ];
 
+  // Update upload progress with speed and ETA calculation
+  const updateUploadProgress = useCallback((
+    fileId: string, 
+    bytesUploaded: number, 
+    totalBytes: number,
+    chunksCompleted?: number,
+    totalChunks?: number
+  ) => {
+    setUploadingFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      
+      const now = Date.now();
+      const startTime = f.startTime || now;
+      const elapsedSeconds = (now - startTime) / 1000;
+      const uploadSpeed = elapsedSeconds > 0 ? bytesUploaded / elapsedSeconds : 0;
+      const remainingBytes = totalBytes - bytesUploaded;
+      const eta = uploadSpeed > 0 ? remainingBytes / uploadSpeed : 0;
+      const progress = Math.round((bytesUploaded / totalBytes) * 100);
+
+      return {
+        ...f,
+        progress,
+        bytesUploaded,
+        uploadSpeed,
+        eta,
+        chunksCompleted,
+        totalChunks,
+        startTime,
+      };
+    }));
+  }, []);
+
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files) return;
@@ -69,9 +110,8 @@ export function FileUpload() {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       
-      // Check if it's a ChatGPT export (zip file)
-      if (file.name.endsWith('.zip') && file.size > 100 * 1024 * 1024) {
-        // Large zip file - use chunked upload
+      // Use chunked upload for large files
+      if (file.size > CHUNKED_UPLOAD_THRESHOLD) {
         await uploadLargeFile(file);
       } else if (file.name.endsWith('.zip')) {
         // Regular zip file - might be ChatGPT export
@@ -98,6 +138,8 @@ export function FileUpload() {
       status: 'uploading',
       progress: 0,
       fileType: isChatGPTExport ? 'chatgpt-export' : file.type,
+      startTime: Date.now(),
+      bytesUploaded: 0,
     };
     
     setUploadingFiles(prev => [...prev, uploadFile]);
@@ -109,56 +151,65 @@ export function FileUpload() {
         formData.append('type', 'chatgpt-export');
       }
 
-      // Simulate upload progress
-      const progressInterval = setInterval(() => {
-        setUploadingFiles(prev => prev.map(f => 
-          f.id === fileId && f.progress < 90 
-            ? { ...f, progress: f.progress + 10 }
-            : f
-        ));
-      }, 100);
-
-      const response = await fetch('/api/process-file', {
-        method: 'POST',
-        body: formData,
-      });
-
-      clearInterval(progressInterval);
-
-      if (response.ok) {
-        const result = await response.json();
-        
-        // Update to complete status
-        setUploadingFiles(prev => prev.map(f => 
-          f.id === fileId 
-            ? { 
-                ...f, 
-                status: 'complete', 
-                progress: 100, 
-                jobId: result.fileId || result.jobId,
-                wordCount: result.wordCount,
-              }
-            : f
-        ));
-
-        toast({
-          title: "File uploaded successfully",
-          description: result.textExtracted 
-            ? `${file.name} - ${result.wordCount} words extracted`
-            : `${file.name} uploaded successfully`,
+      // Use XMLHttpRequest for progress tracking
+      const xhr = new XMLHttpRequest();
+      
+      const uploadPromise = new Promise<any>((resolve, reject) => {
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            updateUploadProgress(fileId, event.loaded, event.total);
+          }
         });
 
-        // Refresh the file list from server
-        queryClient.invalidateQueries({ queryKey: ['/api/uploaded-files'] });
-        
-        // Remove from uploading list after a short delay (server list will show it)
-        setTimeout(() => {
-          setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
-        }, 1000);
-        
-      } else {
-        throw new Error('Upload failed');
-      }
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch {
+              resolve({ success: true });
+            }
+          } else {
+            reject(new Error(`Upload failed with status ${xhr.status}`));
+          }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Network error')));
+        xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+
+        xhr.open('POST', '/api/process-file');
+        xhr.send(formData);
+      });
+
+      const result = await uploadPromise;
+      
+      // Update to complete status
+      setUploadingFiles(prev => prev.map(f => 
+        f.id === fileId 
+          ? { 
+              ...f, 
+              status: 'complete', 
+              progress: 100, 
+              jobId: result.fileId || result.jobId,
+              wordCount: result.wordCount,
+            }
+          : f
+      ));
+
+      toast({
+        title: "File uploaded successfully",
+        description: result.textExtracted 
+          ? `${file.name} - ${result.wordCount?.toLocaleString()} words extracted`
+          : `${file.name} uploaded successfully`,
+      });
+
+      // Refresh the file list from server
+      queryClient.invalidateQueries({ queryKey: ['/api/uploaded-files'] });
+      
+      // Remove from uploading list after a short delay (server list will show it)
+      setTimeout(() => {
+        setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
+      }, 1500);
+      
     } catch (error) {
       setUploadingFiles(prev => prev.map(f => 
         f.id === fileId 
@@ -177,6 +228,7 @@ export function FileUpload() {
   const uploadLargeFile = async (file: File) => {
     const fileId = Math.random().toString(36).substr(2, 9);
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const isChatGPTExport = file.name.endsWith('.zip');
     
     // Add file to uploading list
     const uploadFile: UploadedFile = {
@@ -185,7 +237,11 @@ export function FileUpload() {
       size: file.size,
       status: 'uploading',
       progress: 0,
-      fileType: 'chatgpt-export',
+      fileType: isChatGPTExport ? 'chatgpt-export' : file.type,
+      startTime: Date.now(),
+      bytesUploaded: 0,
+      chunksCompleted: 0,
+      totalChunks,
     };
     
     setUploadingFiles(prev => [...prev, uploadFile]);
@@ -199,7 +255,7 @@ export function FileUpload() {
           filename: file.name,
           fileSize: file.size,
           totalChunks,
-          fileType: 'chatgpt-export',
+          fileType: isChatGPTExport ? 'chatgpt-export' : file.type,
         }),
       });
 
@@ -208,12 +264,14 @@ export function FileUpload() {
       }
 
       const { uploadId } = await initResponse.json();
+      let bytesUploaded = 0;
 
-      // Upload chunks
+      // Upload chunks with progress tracking
       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
         const start = chunkIndex * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
+        const chunkSize = end - start;
 
         const formData = new FormData();
         formData.append('chunk', chunk);
@@ -221,21 +279,37 @@ export function FileUpload() {
         formData.append('chunkIndex', chunkIndex.toString());
         formData.append('totalChunks', totalChunks.toString());
 
-        const chunkResponse = await fetch('/api/upload/chunk', {
-          method: 'POST',
-          body: formData,
-        });
+        // Upload chunk with retry logic
+        let retries = 3;
+        let success = false;
+        
+        while (retries > 0 && !success) {
+          try {
+            const chunkResponse = await fetch('/api/upload/chunk', {
+              method: 'POST',
+              body: formData,
+            });
 
-        if (!chunkResponse.ok) {
-          throw new Error(`Failed to upload chunk ${chunkIndex + 1}`);
+            if (!chunkResponse.ok) {
+              throw new Error(`Chunk upload failed`);
+            }
+            success = true;
+          } catch (error) {
+            retries--;
+            if (retries === 0) throw error;
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
 
-        // Update progress
-        const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
-        setUploadingFiles(prev => prev.map(f => 
-          f.id === fileId ? { ...f, progress } : f
-        ));
+        bytesUploaded += chunkSize;
+        updateUploadProgress(fileId, bytesUploaded, file.size, chunkIndex + 1, totalChunks);
       }
+
+      // Update status to processing
+      setUploadingFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'processing', progress: 100 } : f
+      ));
 
       // Complete the upload
       const completeResponse = await fetch('/api/upload/complete', {
@@ -250,7 +324,7 @@ export function FileUpload() {
 
       const result = await completeResponse.json();
 
-      // Update status
+      // Update status to complete
       setUploadingFiles(prev => prev.map(f => 
         f.id === fileId 
           ? { 
@@ -265,7 +339,9 @@ export function FileUpload() {
 
       toast({
         title: "Large file uploaded successfully",
-        description: `${file.name} - ${result.conversationCount || 0} conversations extracted`,
+        description: result.conversationCount 
+          ? `${file.name} - ${result.conversationCount} conversations extracted`
+          : `${file.name} - ${result.wordCount?.toLocaleString() || 0} words extracted`,
       });
 
       // Refresh file list
@@ -274,7 +350,7 @@ export function FileUpload() {
       // Remove from uploading list
       setTimeout(() => {
         setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
-      }, 1000);
+      }, 1500);
 
     } catch (error) {
       setUploadingFiles(prev => prev.map(f => 
@@ -314,6 +390,27 @@ export function FileUpload() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatSpeed = (bytesPerSecond: number) => {
+    if (bytesPerSecond === 0) return '0 B/s';
+    const k = 1024;
+    const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+    return parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const formatETA = (seconds: number) => {
+    if (seconds === 0 || !isFinite(seconds)) return '--:--';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.round(seconds % 60);
+      return `${mins}m ${secs}s`;
+    }
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  };
+
   const getStatusIcon = (status: UploadedFile['status'], fileType?: string) => {
     if (fileType === 'chatgpt-export') {
       if (status === 'complete') {
@@ -335,13 +432,21 @@ export function FileUpload() {
     }
   };
 
-  const getStatusText = (status: UploadedFile['status'], wordCount?: number) => {
-    switch (status) {
-      case 'uploading': return 'Uploading...';
-      case 'processing': return 'Processing...';
-      case 'complete': return wordCount ? `Ready • ${wordCount.toLocaleString()} words` : 'Ready for search';
-      case 'error': return 'Failed';
-      default: return 'Unknown';
+  const getStatusText = (file: UploadedFile) => {
+    switch (file.status) {
+      case 'uploading': 
+        if (file.chunksCompleted && file.totalChunks) {
+          return `Uploading chunk ${file.chunksCompleted}/${file.totalChunks}`;
+        }
+        return `Uploading... ${file.progress}%`;
+      case 'processing': 
+        return 'Processing...';
+      case 'complete': 
+        return file.wordCount ? `Ready • ${file.wordCount.toLocaleString()} words` : 'Ready for search';
+      case 'error': 
+        return 'Failed';
+      default: 
+        return 'Unknown';
     }
   };
 
@@ -398,36 +503,74 @@ export function FileUpload() {
             {displayFiles.map((file) => (
               <div 
                 key={file.id} 
-                className="flex items-center justify-between p-3 bg-background/50 rounded-lg border"
+                className="flex flex-col p-3 bg-background/50 rounded-lg border"
                 data-testid={`file-item-${file.id}`}
               >
-                <div className="flex items-center gap-3 flex-1">
-                  {getStatusIcon(file.status, file.fileType)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" data-testid={`file-name-${file.id}`}>
-                      {file.name}
-                    </p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span data-testid={`file-size-${file.id}`}>{formatFileSize(file.size)}</span>
-                      <span>•</span>
-                      <span data-testid={`file-status-${file.id}`}>
-                        {getStatusText(file.status, file.wordCount)}
-                      </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 flex-1">
+                    {getStatusIcon(file.status, file.fileType)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate" data-testid={`file-name-${file.id}`}>
+                        {file.name}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span data-testid={`file-size-${file.id}`}>{formatFileSize(file.size)}</span>
+                        <span>•</span>
+                        <span data-testid={`file-status-${file.id}`}>
+                          {getStatusText(file)}
+                        </span>
+                      </div>
                     </div>
-                    {(file.status === 'uploading' || file.status === 'processing') && (
-                      <Progress value={file.progress} className="mt-1 h-1" />
-                    )}
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeFile(file.id, file.jobId)}
+                    className="text-muted-foreground hover:text-foreground"
+                    data-testid={`remove-file-${file.id}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => removeFile(file.id, file.jobId)}
-                  className="text-muted-foreground hover:text-foreground"
-                  data-testid={`remove-file-${file.id}`}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
+                
+                {/* Enhanced Progress Bar for uploading files */}
+                {file.status === 'uploading' && (
+                  <div className="mt-2 space-y-1">
+                    <Progress value={file.progress} className="h-2" />
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <div className="flex items-center gap-3">
+                        {file.uploadSpeed !== undefined && file.uploadSpeed > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Zap className="h-3 w-3" />
+                            {formatSpeed(file.uploadSpeed)}
+                          </span>
+                        )}
+                        {file.bytesUploaded !== undefined && (
+                          <span className="flex items-center gap-1">
+                            <HardDrive className="h-3 w-3" />
+                            {formatFileSize(file.bytesUploaded)} / {formatFileSize(file.size)}
+                          </span>
+                        )}
+                      </div>
+                      {file.eta !== undefined && file.eta > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          ETA: {formatETA(file.eta)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Processing indicator */}
+                {file.status === 'processing' && (
+                  <div className="mt-2">
+                    <Progress value={100} className="h-2 animate-pulse" />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Extracting and indexing content...
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -449,13 +592,13 @@ export function FileUpload() {
         {/* RAG System Status */}
         <div className="p-3 bg-green-50/50 dark:bg-green-950/20 rounded-lg border border-green-200/20">
           <div className="flex items-center gap-2">
-            <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
+            <CheckCircle className="h-4 w-4 text-green-500" />
             <span className="text-sm text-green-700 dark:text-green-300">
               RAG System Active
             </span>
           </div>
           <p className="text-xs text-green-600/80 dark:text-green-400/80 mt-1">
-            Files persist across sessions and are available in all tabs
+            Files persist across sessions and are available in all tabs.
           </p>
         </div>
       </CardContent>

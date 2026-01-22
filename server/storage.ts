@@ -2592,41 +2592,51 @@ export class DbStorage implements IStorage {
   }
 
   async createUploadedFile(file: InsertUploadedFile): Promise<UploadedFile> {
-    try {
-      const { uploadedFiles } = await import('@shared/schema');
-      const [newFile] = await this.db.insert(uploadedFiles).values(file).returning();
-      return newFile;
-    } catch (error) {
-      console.error('Error creating uploaded file:', error);
-      throw error;
-    }
+    const { withDbTimeout } = await import('./db');
+    return withDbTimeout(async () => {
+      try {
+        const { uploadedFiles } = await import('@shared/schema');
+        const [newFile] = await this.db.insert(uploadedFiles).values(file).returning();
+        console.log('File saved to database:', newFile.id);
+        return newFile;
+      } catch (error) {
+        console.error('Error creating uploaded file:', error);
+        throw error;
+      }
+    }, 8000, 2); // 8 second timeout, 2 retries
   }
 
   async getUploadedFile(id: string): Promise<UploadedFile | undefined> {
-    try {
-      const result = await this.db.query.uploadedFiles.findFirst({
-        where: (uploadedFiles: any, { eq }: any) => eq(uploadedFiles.id, id)
-      });
-      return result;
-    } catch (error) {
-      console.error('Error getting uploaded file:', error);
-      throw error;
-    }
+    const { withDbTimeout } = await import('./db');
+    return withDbTimeout(async () => {
+      try {
+        const result = await this.db.query.uploadedFiles.findFirst({
+          where: (uploadedFiles: any, { eq }: any) => eq(uploadedFiles.id, id)
+        });
+        return result;
+      } catch (error) {
+        console.error('Error getting uploaded file:', error);
+        throw error;
+      }
+    }, 5000, 1); // 5 second timeout, 1 retry
   }
 
   async getUserUploadedFiles(userId: string): Promise<UploadedFile[]> {
-    try {
-      const { desc } = await import('drizzle-orm');
-      const { uploadedFiles } = await import('@shared/schema');
-      const result = await this.db.query.uploadedFiles.findMany({
-        where: (files: any, { eq }: any) => eq(files.userId, userId),
-        orderBy: [desc(uploadedFiles.createdAt)]
-      });
-      return result;
-    } catch (error) {
-      console.error('Error getting user uploaded files:', error);
-      throw error;
-    }
+    const { withDbTimeout } = await import('./db');
+    return withDbTimeout(async () => {
+      try {
+        const { desc } = await import('drizzle-orm');
+        const { uploadedFiles } = await import('@shared/schema');
+        const result = await this.db.query.uploadedFiles.findMany({
+          where: (files: any, { eq }: any) => eq(files.userId, userId),
+          orderBy: [desc(uploadedFiles.createdAt)]
+        });
+        return result;
+      } catch (error) {
+        console.error('Error getting user uploaded files:', error);
+        throw error;
+      }
+    }, 5000, 1); // 5 second timeout, 1 retry
   }
 
   async updateUploadedFile(id: string, updates: Partial<UploadedFile>): Promise<UploadedFile | undefined> {
@@ -2657,34 +2667,37 @@ export class DbStorage implements IStorage {
   }
 
   async searchUploadedFiles(query: string, userId?: string): Promise<UploadedFile[]> {
-    try {
-      const { uploadedFiles } = await import('@shared/schema');
-      const { eq, or, like, and, desc } = await import('drizzle-orm');
-      
-      const conditions = [];
-      if (userId) {
-        conditions.push(eq(uploadedFiles.userId, userId));
+    const { withDbTimeout } = await import('./db');
+    return withDbTimeout(async () => {
+      try {
+        const { uploadedFiles } = await import('@shared/schema');
+        const { eq, or, like, and, desc } = await import('drizzle-orm');
+        
+        const conditions = [];
+        if (userId) {
+          conditions.push(eq(uploadedFiles.userId, userId));
+        }
+        
+        if (query.trim()) {
+          conditions.push(
+            or(
+              like(uploadedFiles.filename, `%${query}%`),
+              like(uploadedFiles.originalName, `%${query}%`),
+              like(uploadedFiles.extractedText, `%${query}%`)
+            )
+          );
+        }
+        
+        const result = await this.db.query.uploadedFiles.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: [desc(uploadedFiles.createdAt)]
+        });
+        return result;
+      } catch (error) {
+        console.error('Error searching uploaded files:', error);
+        throw error;
       }
-      
-      if (query.trim()) {
-        conditions.push(
-          or(
-            like(uploadedFiles.filename, `%${query}%`),
-            like(uploadedFiles.originalName, `%${query}%`),
-            like(uploadedFiles.extractedText, `%${query}%`)
-          )
-        );
-      }
-      
-      const result = await this.db.query.uploadedFiles.findMany({
-        where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [desc(uploadedFiles.createdAt)]
-      });
-      return result;
-    } catch (error) {
-      console.error('Error searching uploaded files:', error);
-      throw error;
-    }
+    }, 8000, 1); // 8 second timeout, 1 retry
   }
 
   async createSystemComponent(component: InsertSystemComponent): Promise<SystemComponent> {
