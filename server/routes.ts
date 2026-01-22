@@ -1662,6 +1662,241 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete uploaded file
+  app.delete('/api/files/:fileId', async (req, res) => {
+    try {
+      const { fileId } = req.params;
+      
+      // Remove from in-memory storage
+      inMemoryFiles.delete(fileId);
+      
+      // Try to delete from database
+      try {
+        await withTimeout(storage.deleteUploadedFile(fileId), 3000);
+      } catch (dbError) {
+        console.warn('Database delete failed:', dbError);
+      }
+      
+      res.json({ success: true, message: 'File deleted' });
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+      res.status(500).json({ error: 'Failed to delete file' });
+    }
+  });
+
+  // Chunked upload storage for large files
+  const chunkedUploads = new Map<string, {
+    filename: string;
+    fileSize: number;
+    totalChunks: number;
+    receivedChunks: Set<number>;
+    chunks: Map<number, Buffer>;
+    fileType: string;
+    createdAt: Date;
+  }>();
+
+  // Initialize chunked upload
+  app.post('/api/upload/init', async (req, res) => {
+    try {
+      const { filename, fileSize, totalChunks, fileType } = req.body;
+      
+      if (!filename || !fileSize || !totalChunks) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      chunkedUploads.set(uploadId, {
+        filename,
+        fileSize,
+        totalChunks,
+        receivedChunks: new Set(),
+        chunks: new Map(),
+        fileType: fileType || 'application/octet-stream',
+        createdAt: new Date()
+      });
+      
+      console.log(`Initialized chunked upload: ${uploadId} for ${filename} (${totalChunks} chunks)`);
+      
+      res.json({ uploadId, message: 'Upload initialized' });
+    } catch (error) {
+      console.error('Failed to initialize upload:', error);
+      res.status(500).json({ error: 'Failed to initialize upload' });
+    }
+  });
+
+  // Receive chunk
+  app.post('/api/upload/chunk', upload.single('chunk'), async (req: Request & { file?: Express.Multer.File }, res) => {
+    try {
+      const { uploadId, chunkIndex, totalChunks } = req.body;
+      
+      if (!uploadId || chunkIndex === undefined || !req.file) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      
+      const uploadData = chunkedUploads.get(uploadId);
+      if (!uploadData) {
+        return res.status(404).json({ error: 'Upload not found' });
+      }
+      
+      const chunkIdx = parseInt(chunkIndex);
+      
+      // Read chunk data from temp file
+      const chunkData = fs.readFileSync(req.file.path);
+      uploadData.chunks.set(chunkIdx, chunkData);
+      uploadData.receivedChunks.add(chunkIdx);
+      
+      // Clean up temp file
+      fs.unlinkSync(req.file.path);
+      
+      console.log(`Received chunk ${chunkIdx + 1}/${uploadData.totalChunks} for ${uploadId}`);
+      
+      res.json({ 
+        success: true, 
+        chunkIndex: chunkIdx,
+        receivedChunks: uploadData.receivedChunks.size,
+        totalChunks: uploadData.totalChunks
+      });
+    } catch (error) {
+      console.error('Failed to receive chunk:', error);
+      res.status(500).json({ error: 'Failed to receive chunk' });
+    }
+  });
+
+  // Complete chunked upload
+  app.post('/api/upload/complete', async (req, res) => {
+    try {
+      const { uploadId } = req.body;
+      
+      if (!uploadId) {
+        return res.status(400).json({ error: 'Missing uploadId' });
+      }
+      
+      const uploadData = chunkedUploads.get(uploadId);
+      if (!uploadData) {
+        return res.status(404).json({ error: 'Upload not found' });
+      }
+      
+      // Check if all chunks received
+      if (uploadData.receivedChunks.size !== uploadData.totalChunks) {
+        return res.status(400).json({ 
+          error: 'Not all chunks received',
+          received: uploadData.receivedChunks.size,
+          expected: uploadData.totalChunks
+        });
+      }
+      
+      // Combine chunks in order
+      const chunks: Buffer[] = [];
+      for (let i = 0; i < uploadData.totalChunks; i++) {
+        const chunk = uploadData.chunks.get(i);
+        if (!chunk) {
+          return res.status(400).json({ error: `Missing chunk ${i}` });
+        }
+        chunks.push(chunk);
+      }
+      
+      const completeFile = Buffer.concat(chunks);
+      
+      // Save complete file
+      const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const filePath = path.join(uploadsDir, `${fileId}_${uploadData.filename}`);
+      fs.writeFileSync(filePath, completeFile);
+      
+      console.log(`Completed chunked upload: ${uploadData.filename} (${completeFile.length} bytes)`);
+      
+      // Process the file (extract text, handle ChatGPT exports, etc.)
+      let extractionResult = { success: false, text: '', wordCount: 0 };
+      let chatGptData = null;
+      
+      // Check if it's a ZIP file (ChatGPT export)
+      if (uploadData.filename.endsWith('.zip')) {
+        try {
+          // Extract ZIP and process contents
+          const AdmZip = require('adm-zip');
+          const zip = new AdmZip(filePath);
+          const zipEntries = zip.getEntries();
+          
+          let allText = '';
+          let conversationCount = 0;
+          
+          for (const entry of zipEntries) {
+            if (entry.entryName.endsWith('.json')) {
+              try {
+                const content = entry.getData().toString('utf8');
+                const jsonData = JSON.parse(content);
+                
+                if (Array.isArray(jsonData)) {
+                  // Process conversations
+                  for (const conv of jsonData.slice(0, 5000)) {
+                    conversationCount++;
+                    if (conv.mapping) {
+                      const messages = Object.values(conv.mapping)
+                        .filter((m: any) => m?.message?.content?.parts?.length > 0);
+                      
+                      for (const msg of messages) {
+                        const parts = (msg as any).message?.content?.parts || [];
+                        allText += parts.join(' ') + '\n';
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('Failed to parse JSON entry:', entry.entryName);
+              }
+            }
+          }
+          
+          if (allText) {
+            extractionResult = {
+              success: true,
+              text: allText,
+              wordCount: allText.split(/\s+/).length
+            };
+            chatGptData = { conversationCount };
+          }
+        } catch (zipError) {
+          console.error('Failed to process ZIP:', zipError);
+        }
+      } else {
+        // Regular file - use TextExtractor
+        extractionResult = await TextExtractor.extractText(filePath, uploadData.fileType);
+      }
+      
+      // Store file data
+      const fileData = {
+        id: fileId,
+        filename: uploadData.filename,
+        originalName: uploadData.filename,
+        fileType: uploadData.fileType,
+        fileSize: completeFile.length,
+        filePath: filePath,
+        extractedText: extractionResult.success ? extractionResult.text : null,
+        userId: 'anonymous',
+        status: extractionResult.success ? 'processed' : 'uploaded',
+        createdAt: new Date()
+      };
+      
+      inMemoryFiles.set(fileId, fileData);
+      
+      // Clean up chunked upload data
+      chunkedUploads.delete(uploadId);
+      
+      res.json({
+        success: true,
+        fileId,
+        filename: uploadData.filename,
+        fileSize: completeFile.length,
+        textExtracted: extractionResult.success,
+        wordCount: extractionResult.wordCount,
+        conversationCount: chatGptData?.conversationCount || 0
+      });
+    } catch (error) {
+      console.error('Failed to complete upload:', error);
+      res.status(500).json({ error: 'Failed to complete upload' });
+    }
+  });
+
   // Search uploaded files (RAG functionality)
   app.post('/api/files/search', async (req, res) => {
     try {
