@@ -1557,29 +1557,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       inMemoryFiles.set(fileId, fileData);
       
       // Try to save to database with timeout, but don't block response
-      let dbFileId = fileId;
-      try {
-        const uploadedFile = await withTimeout(
-          storage.createUploadedFile({
-            filename: filename || originalname,
-            originalName: originalname,
-            fileType: mimeType,
-            fileSize: size,
-            filePath: filePath,
-            extractedText: extractionResult.success ? extractionResult.text : null,
-            userId: 'anonymous',
-            status: extractionResult.success ? 'processed' : 'uploaded'
-          }),
-          5000 // 5 second timeout for DB
-        );
-        dbFileId = uploadedFile.id;
-        // Update in-memory with DB id
-        inMemoryFiles.delete(fileId);
-        inMemoryFiles.set(dbFileId, { ...fileData, id: dbFileId });
-      } catch (dbError) {
-        console.warn('Database save failed, using in-memory storage:', dbError);
-        // Continue with in-memory storage - file is still usable
-      }
+      // Use a background task to avoid blocking the response for concurrent uploads
+      (async () => {
+        try {
+          const uploadedFile = await withTimeout(
+            storage.createUploadedFile({
+              filename: filename || originalname,
+              originalName: originalname,
+              fileType: mimeType,
+              fileSize: size,
+              filePath: filePath,
+              extractedText: extractionResult.success ? extractionResult.text : null,
+              userId: 'anonymous',
+              status: extractionResult.success ? 'processed' : 'uploaded'
+            }),
+            10000 // Increased timeout for concurrent DB writes
+          );
+          
+          // Update in-memory with DB id if it changed
+          if (uploadedFile.id !== fileId) {
+            inMemoryFiles.delete(fileId);
+            inMemoryFiles.set(uploadedFile.id, { ...fileData, id: uploadedFile.id });
+          }
+          console.log(`File ${originalname} persisted to database successfully.`);
+        } catch (dbError) {
+          console.warn(`Database save failed for ${originalname}, using in-memory storage:`, dbError);
+        }
+      })();
 
       const processingTime = Date.now() - startTime;
       

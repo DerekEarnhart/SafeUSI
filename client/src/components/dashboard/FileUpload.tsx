@@ -15,9 +15,8 @@ interface UploadedFile {
   progress: number;
   wordCount?: number;
   fileType?: string;
-  // Enhanced progress tracking
-  uploadSpeed?: number;      // bytes per second
-  eta?: number;              // seconds remaining
+  uploadSpeed?: number;
+  eta?: number;
   bytesUploaded?: number;
   startTime?: number;
   chunksCompleted?: number;
@@ -35,9 +34,7 @@ interface ServerFile {
   createdAt: string;
 }
 
-// Chunk size for large file uploads (5MB)
 const CHUNK_SIZE = 5 * 1024 * 1024;
-// Threshold for using chunked upload (100MB)
 const CHUNKED_UPLOAD_THRESHOLD = 100 * 1024 * 1024;
 
 export function FileUpload() {
@@ -46,19 +43,16 @@ export function FileUpload() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Fetch existing files from server - this ensures persistence across tabs
-  const { data: serverFiles = [], isLoading: filesLoading, refetch: refetchFiles } = useQuery<ServerFile[]>({
+  const { data: serverFiles = [], refetch: refetchFiles } = useQuery<ServerFile[]>({
     queryKey: ['/api/uploaded-files'],
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: 5000,
   });
 
-  // Convert server files to display format
+  // Filter out server files that are still in the uploadingFiles state to avoid duplicates
   const displayFiles: UploadedFile[] = [
-    // Currently uploading files
     ...uploadingFiles,
-    // Server files (exclude any that are currently being uploaded)
     ...serverFiles
-      .filter(sf => !uploadingFiles.some(uf => uf.jobId === sf.id))
+      .filter(sf => !uploadingFiles.some(uf => uf.jobId === sf.id || uf.id === sf.id))
       .map(sf => ({
         id: sf.id,
         name: sf.filename,
@@ -71,7 +65,6 @@ export function FileUpload() {
       }))
   ];
 
-  // Update upload progress with speed and ETA calculation
   const updateUploadProgress = useCallback((
     fileId: string, 
     bytesUploaded: number, 
@@ -107,31 +100,26 @@ export function FileUpload() {
     const files = event.target.files;
     if (!files) return;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      
-      // Use chunked upload for large files
+    // Process all files in parallel to avoid blocking the loop
+    const uploadPromises = Array.from(files).map(file => {
       if (file.size > CHUNKED_UPLOAD_THRESHOLD) {
-        await uploadLargeFile(file);
-      } else if (file.name.endsWith('.zip')) {
-        // Regular zip file - might be ChatGPT export
-        await uploadFile(file, true);
+        return uploadLargeFile(file);
       } else {
-        await uploadFile(file, false);
+        return uploadFile(file, file.name.endsWith('.zip'));
       }
-    }
+    });
+
+    await Promise.all(uploadPromises);
     
-    // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const uploadFile = async (file: File, isChatGPTExport: boolean = false) => {
-    const fileId = Math.random().toString(36).substr(2, 9);
+    const fileId = `temp_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Add file to uploading list
-    const uploadFile: UploadedFile = {
+    const newUpload: UploadedFile = {
       id: fileId,
       name: file.name,
       size: file.size,
@@ -142,7 +130,7 @@ export function FileUpload() {
       bytesUploaded: 0,
     };
     
-    setUploadingFiles(prev => [...prev, uploadFile]);
+    setUploadingFiles(prev => [...prev, newUpload]);
 
     try {
       const formData = new FormData();
@@ -151,9 +139,7 @@ export function FileUpload() {
         formData.append('type', 'chatgpt-export');
       }
 
-      // Use XMLHttpRequest for progress tracking
       const xhr = new XMLHttpRequest();
-      
       const uploadPromise = new Promise<any>((resolve, reject) => {
         xhr.upload.addEventListener('progress', (event) => {
           if (event.lengthComputable) {
@@ -174,15 +160,12 @@ export function FileUpload() {
         });
 
         xhr.addEventListener('error', () => reject(new Error('Network error')));
-        xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
-
         xhr.open('POST', '/api/process-file');
         xhr.send(formData);
       });
 
       const result = await uploadPromise;
       
-      // Update to complete status
       setUploadingFiles(prev => prev.map(f => 
         f.id === fileId 
           ? { 
@@ -195,28 +178,17 @@ export function FileUpload() {
           : f
       ));
 
-      toast({
-        title: "File uploaded successfully",
-        description: result.textExtracted 
-          ? `${file.name} - ${result.wordCount?.toLocaleString()} words extracted`
-          : `${file.name} uploaded successfully`,
-      });
-
-      // Refresh the file list from server
       queryClient.invalidateQueries({ queryKey: ['/api/uploaded-files'] });
       
-      // Remove from uploading list after a short delay (server list will show it)
+      // Keep in local state for 3 seconds to ensure smooth transition to server list
       setTimeout(() => {
         setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
-      }, 1500);
+      }, 3000);
       
     } catch (error) {
       setUploadingFiles(prev => prev.map(f => 
-        f.id === fileId 
-          ? { ...f, status: 'error', progress: 0 }
-          : f
+        f.id === fileId ? { ...f, status: 'error', progress: 0 } : f
       ));
-
       toast({
         title: "Upload failed",
         description: `Failed to upload ${file.name}`,
@@ -226,12 +198,11 @@ export function FileUpload() {
   };
 
   const uploadLargeFile = async (file: File) => {
-    const fileId = Math.random().toString(36).substr(2, 9);
+    const fileId = `temp_lg_${Math.random().toString(36).substr(2, 9)}`;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const isChatGPTExport = file.name.endsWith('.zip');
     
-    // Add file to uploading list
-    const uploadFile: UploadedFile = {
+    const newUpload: UploadedFile = {
       id: fileId,
       name: file.name,
       size: file.size,
@@ -244,10 +215,9 @@ export function FileUpload() {
       totalChunks,
     };
     
-    setUploadingFiles(prev => [...prev, uploadFile]);
+    setUploadingFiles(prev => [...prev, newUpload]);
 
     try {
-      // Initialize chunked upload
       const initResponse = await fetch('/api/upload/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -259,19 +229,14 @@ export function FileUpload() {
         }),
       });
 
-      if (!initResponse.ok) {
-        throw new Error('Failed to initialize upload');
-      }
-
+      if (!initResponse.ok) throw new Error('Failed to initialize upload');
       const { uploadId } = await initResponse.json();
       let bytesUploaded = 0;
 
-      // Upload chunks with progress tracking
       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
         const start = chunkIndex * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
-        const chunkSize = end - start;
 
         const formData = new FormData();
         formData.append('chunk', chunk);
@@ -279,113 +244,81 @@ export function FileUpload() {
         formData.append('chunkIndex', chunkIndex.toString());
         formData.append('totalChunks', totalChunks.toString());
 
-        // Upload chunk with retry logic
         let retries = 3;
         let success = false;
-        
         while (retries > 0 && !success) {
           try {
             const chunkResponse = await fetch('/api/upload/chunk', {
               method: 'POST',
               body: formData,
             });
-
-            if (!chunkResponse.ok) {
-              throw new Error(`Chunk upload failed`);
-            }
+            if (!chunkResponse.ok) throw new Error(`Chunk upload failed`);
             success = true;
           } catch (error) {
             retries--;
             if (retries === 0) throw error;
-            // Wait before retry
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         }
 
-        bytesUploaded += chunkSize;
+        bytesUploaded += (end - start);
         updateUploadProgress(fileId, bytesUploaded, file.size, chunkIndex + 1, totalChunks);
       }
 
-      // Update status to processing
       setUploadingFiles(prev => prev.map(f => 
         f.id === fileId ? { ...f, status: 'processing', progress: 100 } : f
       ));
 
-      // Complete the upload
       const completeResponse = await fetch('/api/upload/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploadId }),
       });
 
-      if (!completeResponse.ok) {
-        throw new Error('Failed to complete upload');
-      }
-
+      if (!completeResponse.ok) throw new Error('Failed to complete upload');
       const result = await completeResponse.json();
 
-      // Update status to complete
       setUploadingFiles(prev => prev.map(f => 
         f.id === fileId 
-          ? { 
-              ...f, 
-              status: 'complete', 
-              progress: 100, 
-              jobId: result.fileId,
-              wordCount: result.wordCount,
-            }
+          ? { ...f, status: 'complete', jobId: result.fileId || result.jobId, wordCount: result.wordCount } 
           : f
       ));
 
-      toast({
-        title: "Large file uploaded successfully",
-        description: result.conversationCount 
-          ? `${file.name} - ${result.conversationCount} conversations extracted`
-          : `${file.name} - ${result.wordCount?.toLocaleString() || 0} words extracted`,
-      });
-
-      // Refresh file list
       queryClient.invalidateQueries({ queryKey: ['/api/uploaded-files'] });
-      
-      // Remove from uploading list
       setTimeout(() => {
         setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
-      }, 1500);
+      }, 3000);
 
     } catch (error) {
       setUploadingFiles(prev => prev.map(f => 
-        f.id === fileId 
-          ? { ...f, status: 'error', progress: 0 }
-          : f
+        f.id === fileId ? { ...f, status: 'error', progress: 0 } : f
       ));
-
       toast({
-        title: "Upload failed",
-        description: error instanceof Error ? error.message : `Failed to upload ${file.name}`,
+        title: "Large upload failed",
+        description: `Failed to upload ${file.name}`,
         variant: "destructive",
       });
     }
   };
 
-  const removeFile = async (fileId: string, jobId?: string) => {
-    // Remove from local state
-    setUploadingFiles(prev => prev.filter(f => f.id !== fileId));
-    
-    // If it has a jobId, also delete from server
-    if (jobId) {
-      try {
-        await fetch(`/api/files/${jobId}`, { method: 'DELETE' });
+  const removeFile = async (id: string, jobId?: string) => {
+    try {
+      const fileIdToDelete = jobId || id;
+      const response = await fetch(`/api/files/${fileIdToDelete}`, { method: 'DELETE' });
+      if (response.ok) {
         queryClient.invalidateQueries({ queryKey: ['/api/uploaded-files'] });
-      } catch (error) {
-        console.error('Failed to delete file from server:', error);
+        setUploadingFiles(prev => prev.filter(f => f.id !== id && f.jobId !== id));
+        toast({ title: "File removed", description: "File has been deleted successfully" });
       }
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to remove file", variant: "destructive" });
     }
   };
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
@@ -399,126 +332,80 @@ export function FileUpload() {
   };
 
   const formatETA = (seconds: number) => {
-    if (seconds === 0 || !isFinite(seconds)) return '--:--';
     if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) {
-      const mins = Math.floor(seconds / 60);
-      const secs = Math.round(seconds % 60);
-      return `${mins}m ${secs}s`;
-    }
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    return `${hours}h ${mins}m`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}m ${secs}s`;
   };
 
-  const getStatusIcon = (status: UploadedFile['status'], fileType?: string) => {
-    if (fileType === 'chatgpt-export') {
-      if (status === 'complete') {
-        return <FileArchive className="h-4 w-4 text-green-500" />;
-      }
-      return <FileArchive className="h-4 w-4 text-blue-500" />;
-    }
-    
-    switch (status) {
-      case 'uploading':
-      case 'processing':
-        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
-      case 'complete':
-        return <CheckCircle className="h-4 w-4 text-green-500" />;
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />;
-      default:
-        return <File className="h-4 w-4" />;
-    }
+  const getStatusIcon = (status: string, type?: string) => {
+    if (status === 'uploading') return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
+    if (status === 'processing') return <Loader2 className="h-5 w-5 text-purple-500 animate-spin" />;
+    if (status === 'error') return <AlertCircle className="h-5 w-5 text-red-500" />;
+    if (type === 'chatgpt-export') return <FileArchive className="h-5 w-5 text-blue-500" />;
+    return <CheckCircle className="h-5 w-5 text-green-500" />;
   };
 
   const getStatusText = (file: UploadedFile) => {
-    switch (file.status) {
-      case 'uploading': 
-        if (file.chunksCompleted && file.totalChunks) {
-          return `Uploading chunk ${file.chunksCompleted}/${file.totalChunks}`;
-        }
-        return `Uploading... ${file.progress}%`;
-      case 'processing': 
-        return 'Processing...';
-      case 'complete': 
-        return file.wordCount ? `Ready • ${file.wordCount.toLocaleString()} words` : 'Ready for search';
-      case 'error': 
-        return 'Failed';
-      default: 
-        return 'Unknown';
-    }
+    if (file.status === 'uploading') return `Uploading... ${file.progress}%`;
+    if (file.status === 'processing') return 'Processing...';
+    if (file.status === 'error') return 'Upload failed';
+    return `Ready • ${file.wordCount?.toLocaleString() || 0} words`;
   };
 
   return (
-    <Card className="border-amber-200/20 bg-amber-50/5 dark:bg-amber-950/10">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Upload className="h-5 w-5 text-amber-600" />
+    <Card className="w-full bg-background/50 backdrop-blur-sm border-primary/10">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-lg font-semibold flex items-center gap-2">
+          <Upload className="h-5 w-5 text-primary" />
           Project File Upload
-          {filesLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Upload Area */}
         <div 
-          className="border-2 border-dashed border-amber-300/30 rounded-lg p-8 text-center hover:border-amber-400/50 transition-colors cursor-pointer"
+          className="border-2 border-dashed border-primary/20 rounded-xl p-8 text-center hover:border-primary/40 transition-colors cursor-pointer bg-primary/5 group"
           onClick={() => fileInputRef.current?.click()}
-          data-testid="file-upload-area"
         >
-          <Upload className="h-8 w-8 text-amber-600 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground mb-2">
-            Click to upload project files or drag and drop
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Supports ChatGPT exports (ZIP) • All file types • Up to 1GB+
-          </p>
           <input
-            ref={fileInputRef}
             type="file"
-            multiple
-            accept="*/*,.zip"
+            ref={fileInputRef}
             onChange={handleFileSelect}
             className="hidden"
-            data-testid="file-input"
+            multiple
           />
+          <div className="flex flex-col items-center gap-3">
+            <div className="p-3 bg-primary/10 rounded-full group-hover:scale-110 transition-transform">
+              <Upload className="h-6 w-6 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">Click to upload project files or drag and drop</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Supports ChatGPT exports (ZIP) • All file types • Up to 1GB+
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" className="mt-2">
+              <Upload className="h-4 w-4 mr-2" />
+              Choose Files
+            </Button>
+          </div>
         </div>
 
-        {/* Upload Button */}
-        <Button 
-          onClick={() => fileInputRef.current?.click()}
-          className="w-full bg-amber-600 hover:bg-amber-700"
-          data-testid="upload-button"
-        >
-          <Upload className="h-4 w-4 mr-2" />
-          Choose Files
-        </Button>
-
-        {/* Files List - Shows both uploading and server files */}
         {displayFiles.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-muted-foreground">
+          <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
               Uploaded Files ({displayFiles.length})
             </h4>
             {displayFiles.map((file) => (
-              <div 
-                key={file.id} 
-                className="flex flex-col p-3 bg-background/50 rounded-lg border"
-                data-testid={`file-item-${file.id}`}
-              >
+              <div key={file.id} className="flex flex-col p-3 bg-background/50 rounded-lg border">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 flex-1">
                     {getStatusIcon(file.status, file.fileType)}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate" data-testid={`file-name-${file.id}`}>
-                        {file.name}
-                      </p>
+                      <p className="text-sm font-medium truncate">{file.name}</p>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span data-testid={`file-size-${file.id}`}>{formatFileSize(file.size)}</span>
+                        <span>{formatFileSize(file.size)}</span>
                         <span>•</span>
-                        <span data-testid={`file-status-${file.id}`}>
-                          {getStatusText(file)}
-                        </span>
+                        <span>{getStatusText(file)}</span>
                       </div>
                     </div>
                   </div>
@@ -527,13 +414,11 @@ export function FileUpload() {
                     size="sm"
                     onClick={() => removeFile(file.id, file.jobId)}
                     className="text-muted-foreground hover:text-foreground"
-                    data-testid={`remove-file-${file.id}`}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
                 
-                {/* Enhanced Progress Bar for uploading files */}
                 {file.status === 'uploading' && (
                   <div className="mt-2 space-y-1">
                     <Progress value={file.progress} className="h-2" />
@@ -562,13 +447,10 @@ export function FileUpload() {
                   </div>
                 )}
                 
-                {/* Processing indicator */}
                 {file.status === 'processing' && (
                   <div className="mt-2">
                     <Progress value={100} className="h-2 animate-pulse" />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Extracting and indexing content...
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">Extracting and indexing content...</p>
                   </div>
                 )}
               </div>
@@ -576,26 +458,20 @@ export function FileUpload() {
           </div>
         )}
 
-        {/* ChatGPT Export Info */}
         <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-200/20">
           <div className="flex items-center gap-2">
             <FileArchive className="h-4 w-4 text-blue-500" />
-            <span className="text-sm text-blue-700 dark:text-blue-300">
-              ChatGPT Export Support
-            </span>
+            <span className="text-sm text-blue-700 dark:text-blue-300">ChatGPT Export Support</span>
           </div>
           <p className="text-xs text-blue-600/80 dark:text-blue-400/80 mt-1">
             Upload your ChatGPT data export ZIP file (up to 1GB+). All conversations will be extracted and indexed for search.
           </p>
         </div>
 
-        {/* RAG System Status */}
         <div className="p-3 bg-green-50/50 dark:bg-green-950/20 rounded-lg border border-green-200/20">
           <div className="flex items-center gap-2">
             <CheckCircle className="h-4 w-4 text-green-500" />
-            <span className="text-sm text-green-700 dark:text-green-300">
-              RAG System Active
-            </span>
+            <span className="text-sm text-green-700 dark:text-green-300">RAG System Active</span>
           </div>
           <p className="text-xs text-green-600/80 dark:text-green-400/80 mt-1">
             Files persist across sessions and are available in all tabs.
